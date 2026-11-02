@@ -1,3 +1,4 @@
+from .retrieval import create_index, documentary_spans, index_source, store_quote, source_summary, SOURCE_MODES
 import hashlib
 import json
 import sqlite3
@@ -56,16 +57,14 @@ def encode_qa(tokenizer, record, max_length):
 def create_store(path):
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE samples (id INTEGER PRIMARY KEY, digest TEXT UNIQUE, group_id TEXT, input_ids TEXT, labels TEXT, split TEXT)")
-    conn.execute("CREATE TABLE passages (id INTEGER PRIMARY KEY, source TEXT, content TEXT, digest TEXT UNIQUE)")
+    create_index(conn)
     return conn
 
 
 def add_passage(conn, source, content):
-    for start in range(0, len(content), 1200):
-        passage = content[start:start + 1200].strip()
-        if passage:
-            digest = hashlib.sha256(passage.encode()).hexdigest()
-            conn.execute("INSERT OR IGNORE INTO passages(source,content,digest) VALUES(?,?,?)", (source, passage, digest))
+    for quote, _, _ in documentary_spans(content):
+        store_quote(conn, source, quote)
+
 
 
 def add_sample(conn, input_ids, labels, group):
@@ -74,44 +73,70 @@ def add_sample(conn, input_ids, labels, group):
     conn.execute("INSERT OR IGNORE INTO samples(digest,group_id,input_ids,labels) VALUES(?,?,?,?)", (digest, group, encoded, json.dumps(labels)))
 
 
-def prepare_data(directory, manifest, tokenizer, max_length, database, seed):
+def prepare_data(directory, manifest, tokenizer, max_length, database, seed, source_names=None, source_modes=None):
     conn = create_store(database)
     modes = set()
+    reports = []
+    training_excluded = []
     try:
         for item in manifest:
             path = Path(directory) / item["name"]
+            source = (source_names or {}).get(item["name"], item["name"])
+            source_mode = (source_modes or {}).get(item['name'], 'filtered')
+            if source_mode not in SOURCE_MODES:
+                raise ValueError('Peran sumber tidak didukung.')
+            if source_mode == 'facts_only':
+                training_excluded.append(item['name'])
             if path.suffix.lower() == ".jsonl":
                 modes.add("supervised_qa")
+                records = 0
+                before_quotes = conn.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
                 with path.open(encoding="utf-8") as handle:
                     for number, line in enumerate(handle, 1):
                         if not line.strip():
                             continue
                         try:
                             record = json.loads(line)
-                            ids, labels, context = encode_qa(tokenizer, record, max_length)
+                            record = validate_qa(record)
+                            context = record['context']
+                            if source_mode != 'facts_only':
+                                ids, labels, context = encode_qa(tokenizer, record, max_length)
                         except (ValueError, TypeError) as error:
                             raise ValueError(f"{item['name']} baris {number}: {error}") from None
-                        group = hashlib.sha256(context.encode()).hexdigest()
-                        add_sample(conn, ids, labels, group)
-                        add_passage(conn, item["name"], context)
+                        records += 1
+                        if source_mode != 'facts_only':
+                            group = hashlib.sha256(context.encode()).hexdigest()
+                            add_sample(conn, ids, labels, group)
+                        if source_mode != 'training_only':
+                            add_passage(conn, source, context)
+                reports.append({'name': item['name'], 'format': 'structured_jsonl_qa', 'source_mode': source_mode,
+                    'training_samples': 0 if source_mode == 'facts_only' else records,
+                    'sample_count_kind': 'qa_records_before_tokenizer', 'qa_pairs': records,
+                    'searchable_quotes': conn.execute('SELECT COUNT(*) FROM passages').fetchone()[0] - before_quotes,
+                    'skipped_lines': records if source_mode == 'training_only' else 0})
             else:
                 modes.add("text_adaptation")
+                if source_mode != "facts_only":
+                    with path.open(encoding="utf-8", errors="strict") as handle:
+                        while True:
+                            text = handle.read(16000)
+                            if not text:
+                                break
+                            if "\x00" in text:
+                                raise ValueError(f"Data biner ditemukan: {item['name']}")
+                            if not text.strip():
+                                continue
+                            tokens = tokenizer.encode(text, add_special_tokens=False)
+                            for start in range(0, len(tokens), max_length - 1):
+                                ids = tokens[start:start + max_length - 1] + [tokenizer.eos_token_id]
+                                if len(ids) >= 2:
+                                    group = hashlib.sha256(json.dumps(ids).encode()).hexdigest()
+                                    add_sample(conn, ids, ids.copy(), group)
+            if path.suffix.lower() != ".jsonl":
                 with path.open(encoding="utf-8", errors="strict") as handle:
-                    while True:
-                        text = handle.read(16000)
-                        if not text:
-                            break
-                        if "\x00" in text:
-                            raise ValueError(f"Data biner ditemukan: {item['name']}")
-                        if not text.strip():
-                            continue
-                        add_passage(conn, item["name"], text)
-                        tokens = tokenizer.encode(text, add_special_tokens=False)
-                        for start in range(0, len(tokens), max_length - 1):
-                            ids = tokens[start:start + max_length - 1] + [tokenizer.eos_token_id]
-                            if len(ids) >= 2:
-                                group = hashlib.sha256(json.dumps(ids).encode()).hexdigest()
-                                add_sample(conn, ids, ids.copy(), group)
+                    report = index_source(conn, source, handle, source_mode)
+                    report.update(name=item['name'])
+                    reports.append(report)
             conn.commit()
         groups = [row[0] for row in conn.execute("SELECT DISTINCT group_id FROM samples")]
         if len(groups) < 10:
@@ -122,7 +147,13 @@ def prepare_data(directory, manifest, tokenizer, max_length, database, seed):
             conn.execute("UPDATE samples SET split=? WHERE group_id=?", ("eval" if group in eval_groups else "train", group))
         conn.commit()
         counts = dict(conn.execute("SELECT split,COUNT(*) FROM samples GROUP BY split"))
-        return {"counts": counts, "modes": sorted(modes), "passages": conn.execute("SELECT COUNT(*) FROM passages").fetchone()[0]}
+        passages = conn.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
+        analysis = source_summary(reports)
+        analysis.update(searchable_quotes=passages, sources_ready=passages > 0)
+        if passages:
+            analysis['warning'] = None
+        return {"counts": counts, "modes": sorted(modes), "passages": passages,
+                "source_analysis": analysis, "training_excluded": training_excluded}
     finally:
         conn.close()
 

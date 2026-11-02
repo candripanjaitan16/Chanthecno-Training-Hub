@@ -1,8 +1,10 @@
 import sqlite3
+from app.paths import DATA_HOME, prepare
 
-DATABASE = "cth.db"
+DATABASE = DATA_HOME / "cth.db"
 
 def get_db():
+    prepare()
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn

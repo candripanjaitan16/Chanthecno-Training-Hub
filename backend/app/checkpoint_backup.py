@@ -10,7 +10,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.colab_stop import atomic_json, local_only, project_row
+from app.storage import atomic_json
+from app.colab_stop import local_only, project_row
 from app.drive_storage import upload_project_file
 from app.training_backup import (
     BackupError,
@@ -25,10 +26,9 @@ router = APIRouter(
     tags=["Checkpoint Backups"],
 )
 
-ROOT = (
-    Path(__file__).resolve().parent.parent
-    / "workspace/checkpoint-backups"
-)
+from app.paths import WORKSPACE
+
+ROOT = WORKSPACE / "checkpoint-backups"
 
 INTERVAL = 300
 RUN_PATTERN = r"\d{8}T\d{6}Z-[a-f0-9]{8}"
@@ -59,6 +59,7 @@ CODE_NAMES = {
     "data.py",
     "train.py",
     "web_worker.py",
+    "retrieval.py",
 }
 
 

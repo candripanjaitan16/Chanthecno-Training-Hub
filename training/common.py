@@ -46,6 +46,25 @@ def file_hash(path):
     return digest.hexdigest()
 
 
+def checkpoint_state(directory):
+    required = ("optimizer.pt", "scheduler.pt", "trainer_state.json", "rng_state.pth", "adapter_config.json", "adapter_model.safetensors")
+    result = {}
+    for name in required:
+        path = directory / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
+            raise ValueError("Checkpoint belum memiliki state optimizer/scheduler/RNG dan adapter lengkap.")
+        result[name] = file_hash(path)
+    return result
+
+
+def validate_checkpoint(directory):
+    marker = read_json(directory / "cth-complete.json")
+    files = checkpoint_state(directory)
+    if not marker.get("files") or files != marker["files"]:
+        raise ValueError("Integritas checkpoint belum terverifikasi; tidak mengklaim resume persis.")
+    return directory
+
+
 def script_hash():
     digest = hashlib.sha256()
     for path in sorted(Path(__file__).parent.glob("*.py")):

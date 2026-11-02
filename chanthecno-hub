@@ -1,193 +1,118 @@
 #!/usr/bin/env python3
-
+"""Local production launcher and per-user maintenance commands."""
+import argparse
+import fcntl
 import os
-import shutil
+from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 import webbrowser
-from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parent
-
-BACKEND = ROOT / "backend"
-FRONTEND = ROOT / "frontend"
-PYTHON = BACKEND / ".venv" / "bin" / "python"
-
-BACKEND_URL = "http://127.0.0.1:8000/api/hello"
-FRONTEND_URL = "http://localhost:5173"
-
-processes = []
+PYTHON = ROOT / 'backend/.venv/bin/python'
+sys.path.insert(0, str(ROOT / 'backend'))
+from app.paths import STATE_HOME, prepare
+from app.version import VERSION
 
 
-def port_in_use(port):
-    for host in ("127.0.0.1", "::1"):
-        try:
-            with socket.create_connection((host, port), timeout=0.5):
-                return True
-        except OSError:
-            continue
-
-    return False
-
-
-def start_process(command, directory):
-    environment = os.environ.copy()
-    environment["PYTHONUNBUFFERED"] = "1"
-
-    process = subprocess.Popen(
-        command,
-        cwd=directory,
-        env=environment,
-        start_new_session=True,
-    )
-
-    processes.append(process)
-    return process
-
-
-def wait_until_ready(url, process, label):
-    deadline = time.monotonic() + 90
-
-    # Pemeriksaan lokal tidak melalui proxy
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({})
-    )
-
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(
-                f"{label} berhenti. Periksa pesan terminal di atas."
-            )
-
-        try:
-            with opener.open(url, timeout=2) as response:
-                if response.status == 200:
-                    return
-        except (urllib.error.URLError, OSError):
-            pass
-
-        time.sleep(0.5)
-
-    raise RuntimeError(
-        f"{label} belum siap setelah 90 detik."
-    )
-
-
-def stop_processes():
-    # Hanya hentikan proses yang dibuat peluncur ini
-    for process in reversed(processes):
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-
-    for process in reversed(processes):
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-            process.wait()
+def stop_process(process):
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    except ProcessLookupError:
+        pass
 
 
 def main():
+    parser = argparse.ArgumentParser(description='ChanThecno Training Hub')
+    parser.add_argument('--version', action='version', version=f'CTH {VERSION}')
+    parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('command', nargs='?', choices=['reset-local', 'restore-local', 'connect-drive', 'connect-colab', 'uninstall'])
+    parser.add_argument('--backup', type=Path, help='Backup directory for restore-local')
+    parser.add_argument('--confirm', action='store_true', help='Confirm local reset or restore')
+    args = parser.parse_args()
+    if args.command == 'uninstall':
+        return subprocess.call([sys.executable, str(ROOT / 'tools/install.py'), '--uninstall'])
     if not PYTHON.is_file():
-        raise RuntimeError(
-            "Python backend tidak ditemukan di backend/.venv/bin/python."
-        )
-
-    if not (FRONTEND / "package.json").is_file():
-        raise RuntimeError(
-            "frontend/package.json tidak ditemukan."
-        )
-
-    npm = shutil.which("npm")
-
-    if not npm:
-        raise RuntimeError("Perintah npm tidak ditemukan.")
-
-    for port in (8000, 5173):
-        if port_in_use(port):
-            raise RuntimeError(
-                f"Port {port} masih digunakan. "
-                "Hentikan server lama dengan Ctrl+C di terminalnya, "
-                "lalu jalankan kembali peluncur."
+        raise RuntimeError('Jalankan python3 tools/install.py terlebih dahulu.')
+    if args.command in {'reset-local', 'restore-local'}:
+        command = [str(PYTHON), '-m', 'app.maintenance', args.command]
+        if args.confirm:
+            command.append('--confirm')
+        if args.backup:
+            command.extend(['--backup', str(args.backup)])
+        return subprocess.call(command, cwd=ROOT / 'backend')
+    if args.command in {'connect-drive', 'connect-colab'}:
+        return subprocess.call([str(PYTHON), '-m', 'app.drive_auth', '--' + args.command], cwd=ROOT / 'backend')
+    if not (ROOT / 'frontend/dist/index.html').is_file():
+        raise RuntimeError('Build frontend produksi belum tersedia. Jalankan installer.')
+    prepare()
+    with (STATE_HOME / 'application.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('CTH atau pemeliharaan lokal masih berjalan.') from None
+        for host in ('127.0.0.1', '::1'):
+            try:
+                with socket.create_connection((host, 8000), timeout=.5):
+                    raise RuntimeError('Port 8000 dipakai proses lain. Tidak menghentikan proses tersebut.')
+            except OSError:
+                pass
+        process = None
+        previous = {}
+        def interrupted(signum, frame):
+            raise KeyboardInterrupt
+        try:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                previous[sig] = signal.signal(sig, interrupted)
+            process = subprocess.Popen(
+                [str(PYTHON), '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000'],
+                cwd=ROOT / 'backend', start_new_session=True,
             )
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            deadline = time.monotonic() + 60
+            while True:
+                if process.poll() is not None:
+                    raise RuntimeError('Backend berhenti; periksa pesan terminal.')
+                try:
+                    with opener.open('http://127.0.0.1:8000/api/hello', timeout=2) as response:
+                        if response.status == 200:
+                            break
+                except (urllib.error.URLError, OSError):
+                    pass
+                if time.monotonic() > deadline:
+                    raise RuntimeError('Backend belum siap setelah 60 detik.')
+                time.sleep(.2)
+            url = 'http://127.0.0.1:8000'
+            print(f'CTH siap: {url}\nTekan Ctrl+C untuk keluar.', flush=True)
+            if not args.no_browser:
+                try:
+                    if not webbrowser.open(url):
+                        print('Browser tidak terbuka otomatis. Buka alamat di atas.')
+                except webbrowser.Error:
+                    print('Browser tidak terbuka otomatis. Buka alamat di atas.')
+            return process.wait()
+        finally:
+            stop_process(process)
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
-    print("\nChanThecno Training Hub", flush=True)
-    print("Menyalakan backend...", flush=True)
 
-    backend = start_process(
-        [
-            str(PYTHON),
-            "-m",
-            "uvicorn",
-            "app.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8000",
-        ],
-        BACKEND,
-    )
-
-    wait_until_ready(BACKEND_URL, backend, "Backend")
-
-    print("Menyalakan frontend...", flush=True)
-
-    frontend = start_process(
-        [
-            npm,
-            "run",
-            "dev",
-            "--",
-            "--host",
-            "localhost",
-            "--port",
-            "5173",
-            "--strictPort",
-        ],
-        FRONTEND,
-    )
-
-    wait_until_ready(FRONTEND_URL, frontend, "Frontend")
-
-    print(f"\nCTH siap: {FRONTEND_URL}", flush=True)
-    print("Tekan Ctrl+C untuk menghentikan kedua server.", flush=True)
-
+if __name__ == '__main__':
     try:
-        webbrowser.open(FRONTEND_URL)
-    except webbrowser.Error:
-        print("Buka alamat CTH secara manual di browser.", flush=True)
-
-    while True:
-        for process, label in (
-            (backend, "Backend"),
-            (frontend, "Frontend"),
-        ):
-            if process.poll() is not None:
-                raise RuntimeError(
-                    f"{label} berhenti. Periksa pesan terminal."
-                )
-
-        time.sleep(1)
-
-
-if __name__ == "__main__":
-    try:
-        main()
+        raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nMenghentikan CTH...", flush=True)
-    except Exception as error:
-        print(f"\nCTH gagal dijalankan: {error}", flush=True)
+        print('\nCTH dihentikan. Data pengguna dipertahankan.')
+    except (RuntimeError, OSError, ValueError) as error:
+        print(f'CTH: {error}', file=sys.stderr)
         raise SystemExit(1)
-    finally:
-        stop_processes()

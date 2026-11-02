@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
+import SourceAnalysis from "../components/SourceAnalysis";
+import { analyzeDatasets } from "../services/datasets";
 import NeuralCanvas from "../components/NeuralCanvas";
 import { Badge, Notice, PageTitle } from "../components/UI";
 
 const API = (
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
+  import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://127.0.0.1:8000" : "")
 ).replace(/\/$/, "");
 
 const TERMINAL = new Set(["idle", "completed", "stopped", "failed"]);
@@ -115,7 +117,6 @@ export default function TrainingWorkspace({ onNavigate }) {
   const [runtime, setRuntime] = useState(null);
   const [job, setJob] = useState({ status: "idle" });
   const [epochs, setEpochs] = useState("1");
-  const [preview, setPreview] = useState(false);
   const [busy, setBusy] = useState("");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
@@ -123,6 +124,9 @@ export default function TrainingWorkspace({ onNavigate }) {
   const [jobError, setJobError] = useState("");
   const [message, setMessage] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [selectedDatasetIds, setSelectedDatasetIds] = useState([]);
+  const [analysisResult, setAnalysisResult] = useState({ key: "", report: null, error: "" });
+  const [emptyAcceptedFor, setEmptyAcceptedFor] = useState("");
   const [lastChecked, setLastChecked] = useState(null);
   const [runtimeChecked, setRuntimeChecked] = useState(0);
   const [preflight, setPreflight] = useState(false);
@@ -139,12 +143,24 @@ export default function TrainingWorkspace({ onNavigate }) {
 
   const urlCount = datasets.filter((source) => source.type === "url").length;
 
-  const allSourcesReady =
-    txtSources.length > 0 &&
-    txtSources.length <= 500 &&
-    txtSources.every(
-      (source) => source.drive_status === "saved" && source.receipt_id,
-    );
+  const selectedSources = txtSources.filter(source => selectedDatasetIds.includes(source.id));
+  const selectedBytes = selectedSources.reduce((total, source) => total + source.size, 0);
+  const allSourcesReady = selectedSources.length > 0 && selectedSources.length <= 500 &&
+    selectedSources.every(source => source.local_saved && source.drive_status === "saved" && source.receipt_id);
+
+  const analysisKey = selectedSources.map(source => `${source.id}:${source.sha256}:${source.source_mode || "filtered"}`).join("|");
+  const sourceAnalysis = analysisResult.key === analysisKey ? analysisResult.report : null;
+  const analysisError = analysisResult.key === analysisKey ? analysisResult.error : "";
+  const emptyAccepted = Boolean(analysisKey && emptyAcceptedFor === analysisKey);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!projectId || !analysisKey) return () => controller.abort();
+    const ids = analysisKey.split("|").map(value => value.split(":")[0]);
+    const timer = setTimeout(() => analyzeDatasets(projectId, ids, controller.signal).then(report => {
+      if (!controller.signal.aborted) setAnalysisResult({ key: analysisKey, report, error: "" });
+    }).catch(error => { if (!controller.signal.aborted) setAnalysisResult({ key: analysisKey, report: null, error: error.message }); }), 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [projectId, analysisKey]);
 
   const activeJob = !TERMINAL.has(job.status);
 
@@ -157,7 +173,7 @@ export default function TrainingWorkspace({ onNavigate }) {
   const jobFresh = lastChecked && clock - lastChecked.getTime() < 30000;
 
   const training =
-    job.status === "training" && jobFresh && !jobError && !job.connection_error;
+    job.status === "training" && job.worker_running === true && jobFresh && !jobError && !job.connection_error;
 
   const name = modelName.trim();
 
@@ -175,7 +191,10 @@ export default function TrainingWorkspace({ onNavigate }) {
 
   const canStart =
     canCheck &&
+    preflight &&
     allSourcesReady &&
+    sourceAnalysis?.training_samples > 0 &&
+    (sourceAnalysis.sources_ready || emptyAccepted) &&
     !datasetsLoading &&
     !datasetsError &&
     validModel &&
@@ -276,7 +295,6 @@ export default function TrainingWorkspace({ onNavigate }) {
     setLastChecked(null);
     setRuntimeChecked(0);
     setConfirmed(false);
-    setPreview(false);
     setPreflight(false);
     setError("");
     setRuntimeError("");
@@ -363,9 +381,7 @@ export default function TrainingWorkspace({ onNavigate }) {
   function startTraining() {
     if (!canStart) return;
 
-    const receipts = [
-      ...new Set(txtSources.map((source) => source.receipt_id)),
-    ];
+    const datasetIds = selectedSources.map(source => source.id);
 
     const selectedName = name;
     const selectedEpochs = Number(epochs);
@@ -377,13 +393,13 @@ export default function TrainingWorkspace({ onNavigate }) {
           project_id: id,
           model_name: selectedName,
           epochs: selectedEpochs,
-          source_receipts: receipts,
+          dataset_ids: datasetIds,
+          acknowledge_empty_sources: emptyAccepted,
         }),
       );
 
       if (valid()) {
         setJob(started);
-        setPreview(false);
 
         setMessage(
           `Permintaan training ${selectedName} diterima. Jangan menekan Mulai lagi.`,
@@ -437,40 +453,54 @@ export default function TrainingWorkspace({ onNavigate }) {
 
       {txtSources.length > 0 && !allSourcesReady && (
         <Notice tone="warning">
-          Tunggu semua TXT tersimpan di Drive. Maksimal 500 TXT per pekerjaan.
+          Pilih 1–500 TXT untuk training baru. Semua pilihan wajib tersimpan lokal dan terverifikasi di Drive.
         </Notice>
       )}
+
+      <section className="cth-card cth-section-gap" aria-label="Pilihan dataset training">
+        <h2>Dataset untuk training baru</h2>
+        <p className="cth-muted">Pilih versi TXT yang akan dipakai. URL tidak dipakai untuk training.</p>
+        <fieldset disabled={activeJob || Boolean(busy)} style={{ border: 0, padding: 0, maxHeight: 260, overflow: "auto" }}>
+          <legend className="cth-muted">{txtSources.length} TXT tersedia pada proyek ini</legend>
+          {txtSources.map(source => <label key={source.id} style={{ display: "flex", gap: 10, padding: "10px 0", alignItems: "flex-start" }}>
+            <input type="checkbox" aria-label={`Pilih dataset ${source.name}`} checked={selectedDatasetIds.includes(source.id)} onChange={event => {
+              setSelectedDatasetIds(previous => event.target.checked ? [...previous, source.id] : previous.filter(id => id !== source.id));
+              setConfirmed(false);
+            }} />
+            <span style={{ minWidth: 0, overflowWrap: "anywhere" }}><strong>{source.name}</strong><br />
+              <small>{(source.size / 1024).toFixed(1)} KiB · {source.local_saved ? "Salinan lokal tersedia" : "Pulihkan salinan lokal dahulu"} · {source.drive_status === "saved" ? "Drive terverifikasi" : source.drive_status === "failed" ? "Sinkronisasi gagal — retry di Datasets" : "Drive belum terverifikasi"}</small>
+            </span>
+          </label>)}
+        </fieldset>
+        <p role="status">{selectedSources.length} TXT dipilih · {(selectedBytes / 1024).toFixed(1)} KiB · {allSourcesReady ? "Siap diperiksa ulang backend sebelum training" : "Belum siap dilatih"}</p>
+        {selectedSources.length > 0 && <details><summary>Ringkasan versi yang dipilih</summary>
+          {selectedSources.map(source => <p key={source.id} style={{ overflowWrap: "anywhere" }}><strong>{source.name}</strong> · Drive ID: {source.drive_file_id || "belum ada"}<br /><small>SHA-256: {source.sha256}</small></p>)}
+        </details>}
+        <SourceAnalysis report={sourceAnalysis} />
+        {analysisError && <Notice tone="error">Analisis sumber gagal: {analysisError}</Notice>}
+        {sourceAnalysis && !sourceAnalysis.sources_ready && <label><input type="checkbox" aria-label="Lanjutkan tanpa indeks sumber" checked={emptyAccepted} onChange={event => setEmptyAcceptedFor(event.target.checked ? analysisKey : "")} /> Saya memahami indeks kosong dan memilih latihan tanpa kutipan sumber. Ini tidak membuat jawaban ASSISTANT menjadi fakta.</label>}
+        {job.dataset_stats?.counts && <p>Sampel aktual setelah tokenizer: train {job.dataset_stats.counts.train || 0} · evaluasi {job.dataset_stats.counts.eval || 0}</p>}
+        <p className="cth-muted">Training baru membuat run dan manifest baru. Resume checkpoint adalah tindakan CLI terpisah yang mensyaratkan dataset, konfigurasi dan state cocok. Menambah dataset tidak melanjutkan run lama.</p>
+      </section>
 
       <div className="cth-grid training-layout">
         <section className="cth-card cth-visual-card">
           <div className="cth-card-heading">
             <h2>Neural Activity</h2>
 
-            <Badge tone={training || preview ? "info" : "neutral"}>
-              {training ? "Training aktif" : preview ? "Demo visual" : "Diam"}
+            <Badge tone={training ? "info" : "neutral"}>
+              {training ? "Training aktif" : "Diam"}
             </Badge>
           </div>
 
-          <NeuralCanvas active={Boolean(training || preview)} />
+          <NeuralCanvas active={Boolean(training)} />
 
           <div className="cth-visual-footer">
             <p>
               {training
                 ? "Animasi mengikuti status training yang baru diperiksa."
-                : preview
-                  ? "Ini pratinjau animasi, bukan proses training."
-                  : "Belum ada status training aktif yang terverifikasi."}
+                : "Belum ada heartbeat worker aktif yang terverifikasi."}
             </p>
-
-            <button
-              className="cth-button"
-              disabled={activeJob || Boolean(busy)}
-              onClick={() => {
-                setPreview((value) => !value);
-              }}
-            >
-              {preview ? "Hentikan pratinjau" : "Pratinjau animasi"}
-            </button>
           </div>
         </section>
 
@@ -666,7 +696,7 @@ export default function TrainingWorkspace({ onNavigate }) {
               disabled={!canStart}
               onClick={startTraining}
             >
-              {busy || "Mulai training"}
+              {busy || "Mulai training baru"}
             </button>
 
             {activeJob && (

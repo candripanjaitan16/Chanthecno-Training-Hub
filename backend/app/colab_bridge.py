@@ -61,9 +61,11 @@ class RuntimeBridge:
             parts.path.rstrip("/") + "/" + path.lstrip("/"), urlencode(query), ""))
 
     def request(self, method, path, **kwargs):
-        response = self.http.request(method, self.url(path), timeout=30, allow_redirects=False, **kwargs)
+        response = self.http.request(method, self.url(path), timeout=(15, 90), allow_redirects=False, **kwargs)
         if not response.ok:
-            raise BridgeError(f"Akses Jupyter gagal: HTTP {response.status_code}.")
+            status = response.status_code
+            response.close()
+            raise BridgeError(f"Akses Jupyter gagal: HTTP {status}.")
         return response
 
     def start_kernel(self):

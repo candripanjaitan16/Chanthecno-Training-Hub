@@ -42,6 +42,6 @@ export default function GoogleDrive({ onNavigate }) {
         </article>)}</div>}
       </section>
     </div>
-    <Notice>Metadata proyek disimpan saat Create Project berhasil. Autosave dataset dan progres training ke Drive belum dibuat. Pilihan proyek diingat di browser; isi dataset tidak disimpan di browser storage.</Notice>
+    <Notice>Metadata proyek disimpan saat Create Project berhasil. Dataset tersimpan di backend; status salinan lokal dan cadangan Drive ditampilkan terpisah pada halaman Datasets. Pilihan proyek diingat di browser; isi dataset tidak disimpan di browser storage.</Notice>
   </>;
 }

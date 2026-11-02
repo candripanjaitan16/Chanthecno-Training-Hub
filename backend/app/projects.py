@@ -24,11 +24,11 @@ def create_project(project: ProjectCreate):
     # Buat folder di Google Drive
     try:
         folder_id = create_project_folder(project.name)
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=f"Gagal membuat folder Google Drive: {str(e)}"
-        )
+            detail="Folder Google Drive belum berhasil dibuat. Periksa otorisasi akun dan koneksi Drive."
+        ) from None
 
     # Simpan proyek ke SQLite
     conn = get_db()

@@ -1,6 +1,5 @@
 import base64
 import fcntl
-import hashlib
 import json
 import re
 import shutil
@@ -13,7 +12,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from googleapiclient.http import MediaIoBaseDownload
 
-from app.colab_stop import atomic_json
+from app.storage import atomic_json
 from app.drive_storage import (
     storage_connection,
     project_folder_id,
@@ -67,7 +66,7 @@ def records(project_id):
 
             if (
                 identity(job, project_id)
-                and job.get("status") == "completed"
+                and (job.get("status") == "completed" or job.get("training_status") == "completed")
             ):
                 found[job["job_id"]] = job
 
@@ -78,7 +77,7 @@ def records(project_id):
 
     if (
         identity(current, project_id)
-        and current.get("status") == "completed"
+        and (current.get("status") == "completed" or current.get("training_status") == "completed")
     ):
         found[current["job_id"]] = current
 
@@ -258,6 +257,7 @@ def download_drive(
         not isinstance(size, int)
         or isinstance(size, bool)
         or size <= 0
+        or size > 2 * 1024**3
     ):
         raise ValueError("Ukuran cadangan tidak valid.")
 
@@ -386,8 +386,14 @@ def archive_for(job, work, drive):
 
 
 def unpack(archive, target, job):
+    if target.is_symlink() or target.resolve() != target:
+        raise ValueError("Direktori ekstraksi tidak aman.")
     with tarfile.open(archive, "r:*") as tar:
-        entries = tar.getmembers()
+        entries = []
+        for entry in tar:
+            entries.append(entry)
+            if len(entries) > 100 or entry.size < 0 or entry.size > 2 * 1024**3 or sum(item.size for item in entries) > 2 * 1024**3:
+                raise ValueError("Arsip model melebihi batas ukuran atau jumlah berkas.")
         names = [entry.name for entry in entries]
 
         if (
@@ -449,6 +455,8 @@ def unpack(archive, target, job):
 
         if (
             not isinstance(records_list, list)
+            or any(not isinstance(record, dict) for record in records_list)
+            or len(records_list) != len(names) - 1
             or {
                 record.get("path")
                 for record in records_list
@@ -537,81 +545,34 @@ def unpack(archive, target, job):
 
 
 def rebuild_index(job, manifest, work, run, drive):
-    sources = manifest.get("source_backups") or []
-
+    from contextlib import closing
+    from importlib.util import spec_from_file_location, module_from_spec
+    sources = manifest.get('source_backups') or []
     if not sources or len(sources) > 500:
-        raise ValueError(
-            "Cadangan TXT untuk indeks "
-            "pengujian tidak tersedia."
-        )
-
-    database = run / "dataset.sqlite"
-
-    with sqlite3.connect(database) as connection:
-        connection.execute(
-            "CREATE TABLE passages ("
-            "id INTEGER PRIMARY KEY,"
-            "source TEXT,"
-            "content TEXT,"
-            "digest TEXT UNIQUE)"
-        )
-
+        raise ValueError('Cadangan TXT untuk indeks pengujian tidak tersedia.')
+    code = Path(__file__).resolve().parents[2] / 'training/retrieval.py'
+    if code.is_symlink() or not code.is_file():
+        raise ValueError('Kode retrieval tidak tersedia.')
+    spec = spec_from_file_location('cth_retrieval', code)
+    retrieval = module_from_spec(spec)
+    spec.loader.exec_module(retrieval)
+    with closing(sqlite3.connect(run / 'dataset.sqlite')) as connection:
+        retrieval.create_index(connection)
+        reports = []
         for index, meta in enumerate(sources):
-            text_file = work / f"source-{index}.txt"
-
-            download_drive(
-                drive,
-                job["project_id"],
-                meta.get("file_id"),
-                "datasets",
-                text_file,
-                meta.get("size"),
-                meta.get("sha256"),
-            )
-
-            with text_file.open(
-                encoding="utf-8",
-                errors="strict",
-            ) as handle:
-                while block := handle.read(16000):
-                    if "\x00" in block:
-                        raise ValueError(
-                            "TXT mengandung NUL."
-                        )
-
-                    for offset in range(
-                        0,
-                        len(block),
-                        1200,
-                    ):
-                        text = block[
-                            offset:offset + 1200
-                        ].strip()
-
-                        if text:
-                            digest = hashlib.sha256(
-                                text.encode()
-                            ).hexdigest()
-
-                            connection.execute(
-                                "INSERT OR IGNORE INTO "
-                                "passages(source,content,digest) "
-                                "VALUES(?,?,?)",
-                                (
-                                    f"{index:04d}.txt",
-                                    text,
-                                    digest,
-                                ),
-                            )
-
+            text_file = work / f'source-{index}.txt'
+            download_drive(drive, job['project_id'], meta.get('file_id'), 'datasets',
+                           text_file, meta.get('size'), meta.get('sha256'))
+            label = f"{meta.get('name', 'TXT tersimpan')} (Drive: {meta['file_id']})"
+            with text_file.open(encoding='utf-8', errors='strict') as handle:
+                report = retrieval.index_source(connection, label, handle, meta.get('source_mode', 'filtered'))
+                report.update(name=meta.get('name'), file_id=meta['file_id'], sha256=meta.get('sha256'), size=meta.get('size'), dataset_id=meta.get('dataset_id'))
+                reports.append(report)
             text_file.unlink()
-
         connection.commit()
-
-        if not connection.execute(
-            "SELECT COUNT(*) FROM passages"
-        ).fetchone()[0]:
-            raise ValueError("Indeks sumber kosong.")
+    report = retrieval.source_summary(reports)
+    atomic_json(run / 'source-index-version.json', {'version': 2, 'source_analysis': report})
+    return report
 
 
 RESTORE = r'''
@@ -729,6 +690,11 @@ with ExitStack() as locks:
             for name, expected in cfg['files'].items():
                 target = run / name
 
+                if name in {'dataset.sqlite', 'source-index-version.json'}:
+                    if target.is_symlink():
+                        raise RuntimeError('Indeks sumber berupa symlink')
+                    continue
+
                 if (
                     target.resolve() != target
                     or not target.is_file()
@@ -738,16 +704,11 @@ with ExitStack() as locks:
                         'tidak ditimpa otomatis'
                     )
 
-                if name != 'dataset.sqlite':
-                    digest = hashlib.sha256(
-                        target.read_bytes()
-                    ).hexdigest()
-
-                    if digest != expected:
-                        raise RuntimeError(
-                            'Run lama berbeda; '
-                            'tidak ditimpa otomatis'
-                        )
+                digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                if digest != expected:
+                    raise RuntimeError('Run lama berbeda; tidak ditimpa otomatis')
+            os.replace(stage / 'dataset.sqlite', run / 'dataset.sqlite')
+            os.replace(stage / 'source-index-version.json', run / 'source-index-version.json')
         else:
             stage.rename(run)
 
@@ -874,7 +835,9 @@ def restore_worker(job, restore_id, handle, open_bridge):
             ),
         )
 
-        rebuild_index(
+        if job.get('inference_sources') is not None:
+            manifest = {**manifest, 'source_backups': job['inference_sources']}
+        index_report = rebuild_index(
             job,
             manifest,
             work,
@@ -1004,10 +967,8 @@ def restore_worker(job, restore_id, handle, open_bridge):
             project_id,
             restore_id,
             status="completed",
-            message=(
-                "Model dan indeks dipulihkan. "
-                "Lingkungan inferensi T4 siap."
-            ),
+            message="Model dipulihkan. " + ("Indeks sumber tersedia; kecocokan jawaban tetap perlu diuji." if index_report['sources_ready'] else index_report['warning']),
+            source_analysis=index_report,
             percent=100,
             run_id=job["run_id"],
         )

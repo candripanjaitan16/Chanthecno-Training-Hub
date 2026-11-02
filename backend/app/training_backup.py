@@ -5,13 +5,16 @@ import re
 import shutil
 import tarfile
 from pathlib import Path
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from app.colab_bridge import BridgeError
-from app.colab_stop import atomic_json
+from app.storage import atomic_json
 from app.drive_storage import upload_project_file
 
-BACKEND = Path(__file__).resolve().parent.parent
+from app.paths import DATA_HOME
+
+BACKEND = DATA_HOME
 BACKUPS = BACKEND / 'workspace/training-web/backups'
 RUN_PATTERN = r'\d{8}T\d{6}Z-[a-f0-9]{8}'
 META_NAMES = {'run.json', 'complete.json', 'evaluation.json', 'status.json'}
@@ -67,8 +70,21 @@ def read_remote_job(bridge, job):
         if data is not None:
             if data.get('job_id') != job['job_id'] or data.get('project_id') != job['project_id']:
                 raise BackupError('Identitas status remote tidak sesuai pekerjaan.')
+            pulse = read_json_file(bridge, path.replace('/job.json', '/heartbeat.json'), missing_ok=True)
+            data['worker_running'] = heartbeat_fresh(pulse, job['job_id'])
             return data
     raise BackupError('Berkas status worker belum ditemukan. Tidak meluncurkan worker kedua otomatis.')
+
+
+def heartbeat_fresh(pulse, job_id):
+    if not pulse or pulse.get('job_id') != job_id:
+        return False
+    try:
+        timestamp = datetime.fromisoformat(pulse['updated_at'])
+        age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+        return -30 <= age <= 90
+    except (ValueError, KeyError, TypeError):
+        return False
 
 
 def write_stop_request(bridge, job):
@@ -248,7 +264,7 @@ def upload_local_backup(job, local, progress):
             return receipt
     progress('uploading', 'Training selesai. Mengunggah dan memverifikasi adapter di Drive…')
     receipt = upload_project_file(job['project_id'], archive, 'models')
-    if receipt.get('verified') is not True or receipt.get('sha256') != data['sha256']:
+    if receipt.get('verified') is not True or receipt.get('sha256') != data['sha256'] or receipt.get('size') != data['size']:
         raise BackupError('Upload Drive belum terverifikasi. Arsip lokal tetap dipertahankan.')
     atomic_json(receipt_file, receipt)
     return receipt

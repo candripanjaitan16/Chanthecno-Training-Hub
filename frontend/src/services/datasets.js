@@ -1,4 +1,4 @@
-const API = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API = (import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://127.0.0.1:8000" : "")).replace(/\/$/, "");
 
 async function request(path, options = {}, timeout = 30000) {
   const controller = new AbortController();
@@ -49,3 +49,9 @@ export const deleteDataset = (id, source) => request(sourcePath(id, source), { m
 export const syncDataset = (id, source) => request(`${sourcePath(id, source)}/sync`, { method: "POST" });
 export const restoreDataset = (id, source) => request(`${sourcePath(id, source)}/restore`, { method: "POST" }, 1800000);
 export const previewDataset = (id, source) => request(`${sourcePath(id, source)}/preview`);
+export const analyzeDatasets = (id, datasetIds, signal) => request(`${projectPath(id)}/analysis`, {
+  method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataset_ids: datasetIds }),
+}, 120000);
+export const setSourceMode = (id, source, mode) => request(`${sourcePath(id, source)}/source-mode`, {
+  method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source_mode: mode }),
+}, 120000);

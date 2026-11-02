@@ -1,0 +1,8 @@
+{
+  "version": "1.1.2",
+  "changes": [
+    "Pilihan QA terkurasi eksplisit mengindeks jawaban relevan tanpa penanda role atau pertanyaan lain.",
+    "Filter instruksi, peringatan indeks kosong, dan verifikasi Drive tetap berlaku.",
+    "Sumber model tersimpan dapat diperbarui dari QA terkurasi tanpa training ulang."
+  ]
+}

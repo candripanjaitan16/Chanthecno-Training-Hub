@@ -1,3 +1,4 @@
+import UpdateStatus from "./UpdateStatus";
 import Icon from "./Icon";
 export const menus = [
   { id: "overview", label: "Overview", icon: "overview" },
@@ -22,7 +23,7 @@ export default function Sidebar({ activePage, onNavigate, open, onClose }) {
         onClick={() => { onNavigate(menu.id); onClose(); }}>
         <Icon name={menu.icon} /><span>{menu.label}</span>
       </a>)}</nav>
-      <div className="cth-sidebar-footer"><span className="cth-small-dot" />Local development</div>
+      <div className="cth-sidebar-footer"><UpdateStatus /></div>
     </aside>
   </>;
 }

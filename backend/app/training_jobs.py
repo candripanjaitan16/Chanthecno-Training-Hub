@@ -15,8 +15,9 @@ from fastapi import APIRouter, HTTPException, Request
 from googleapiclient.http import MediaIoBaseDownload
 from pydantic import BaseModel, Field
 
-from app.colab_bridge import BridgeError, RuntimeBridge as BaseRuntimeBridge
-from app.colab_stop import atomic_json, local_only, project_row, receipt_path, verify_receipts
+from app.colab_bridge import BridgeError, RuntimeBridge
+from app.storage import atomic_json
+from app.colab_stop import local_only, project_row, receipt_path
 from app.drive_storage import storage_connection, upload_project_file
 from app.training_backup import (
     BackupError, local_backup, prepare_local_backup, read_remote_job,
@@ -28,25 +29,18 @@ from app.checkpoint_backup import router as checkpoint_router, sync_checkpoint
 router = APIRouter()
 router.include_router(checkpoint_router)
 REPO = Path(__file__).resolve().parents[2]
-WORK = REPO / 'backend/workspace/training-web'
+from app import dataset_manifest
+from app.paths import WORKSPACE
+
+WORK = WORKSPACE / 'training-web'
 CURRENT = WORK / 'current.json'
 TERMINAL = {'completed', 'stopped', 'failed'}
-CODE_FILES = ['__init__.py', 'common.py', 'data.py', 'train.py', 'web_worker.py']
+CODE_FILES = ['__init__.py', 'common.py', 'data.py', 'train.py', 'web_worker.py', 'retrieval.py']
 MONITORS = {}
 MONITOR_GUARD = threading.Lock()
 POLL_SECONDS = 15
 RETRY_SECONDS = 60
 
-
-class RuntimeBridge(BaseRuntimeBridge):
-    def request(self, method, path, **kwargs):
-        response = self.http.request(method, self.url(path), timeout=(15, 90),
-                                     allow_redirects=False, **kwargs)
-        if not response.ok:
-            status = response.status_code
-            response.close()
-            raise BridgeError(f'Akses Jupyter gagal: HTTP {status}.')
-        return response
 
 
 def preflight_record(project_id):
@@ -64,7 +58,9 @@ class StartTraining(BaseModel):
     project_id: int = Field(gt=0)
     model_name: str = Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$')
     epochs: float = Field(default=1, gt=0, le=5, allow_inf_nan=False)
-    source_receipts: list[str] = Field(min_length=1, max_length=500)
+    dataset_ids: list[str] = Field(default_factory=list, max_length=500)
+    acknowledge_empty_sources: bool = False
+    source_receipts: list[str] = Field(default_factory=list, max_length=500)
 
 
 def load_job():
@@ -183,6 +179,7 @@ def uncertain_job(job, message, error):
         job,
         status='uncertain',
         training_status='unknown',
+        worker_running=None,
         last_confirmed_training_status=confirmed,
         message=message,
         connection_error=safe_error(error),
@@ -289,7 +286,10 @@ def monitor_once(job):
             phase = data.get('status')
             if phase not in {'preparing', 'training', 'stopped', 'failed', 'completed'}:
                 raise BackupError('Status worker tidak dikenali. Tidak meluncurkan pekerjaan baru.')
-            allowed = {'updated_at', 'run_id', 'step', 'max_steps', 'epoch', 'metrics', 'gpu_verified', 'error_type'}
+            if phase in {'training', 'preparing'} and not data.get('worker_running'):
+                uncertain_job(job, 'Heartbeat worker belum terverifikasi. Progres lama adalah riwayat; periksa koneksi tanpa mengulang training.', BackupError('Heartbeat worker tidak tersedia atau kedaluwarsa.'))
+                return
+            allowed = {'updated_at', 'run_id', 'step', 'max_steps', 'epoch', 'metrics', 'gpu_verified', 'error_type', 'worker_running', 'dataset_stats'}
             fields = {key: value for key, value in data.items() if key in allowed}
             fields.update(
                 training_status=phase,
@@ -379,8 +379,8 @@ print("CTH_CONTROL:" + json.dumps({{"ok": True, "job": data}}))
 '''
 
 
-def build_bundle(body, target):
-    sources = verify_receipts(body.project_id, list(dict.fromkeys(body.source_receipts)))
+def build_bundle(body, target, manifest):
+    sources = manifest['datasets']
     drive = storage_connection()
     with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_STORED) as archive:
         for name in CODE_FILES:
@@ -389,9 +389,7 @@ def build_bundle(body, target):
                 raise BridgeError(f'File worker belum tersedia: training/{name}.')
             archive.write(path, 'code/training/' + name)
         archive.write(REPO / 'requirements-training.txt', 'code/requirements-training.txt')
-        for index, receipt_id in enumerate(dict.fromkeys(body.source_receipts)):
-            record = json.loads(receipt_path(receipt_id).read_text())
-            meta = record['upload']
+        for index, meta in enumerate(sources):
             if not meta['name'].lower().endswith('.txt'):
                 raise BridgeError('Training web saat ini menerima TXT; URL belum diambil isinya.')
             with tempfile.TemporaryFile() as handle:
@@ -438,7 +436,7 @@ print('CTH_CONTROL:' + json.dumps({{"ok": True}}))
 
 def launch_code(job, body, archive_path, sha256):
     path = remote_path(job)
-    config = {'project_id': body.project_id, 'model_name': body.model_name, 'epochs': body.epochs}
+    config = {'project_id': body.project_id, 'model_name': body.model_name, 'epochs': body.epochs, 'dataset_manifest': dataset_manifest.load(job)}
     initial = {'status': 'preparing', 'project_id': body.project_id, 'job_id': job['job_id'], 'message': 'Worker diterima runtime.'}
     return f'''import fcntl, hashlib, json, os, subprocess, sys, zipfile
 from pathlib import Path
@@ -561,7 +559,9 @@ def prepare_job(job, body, handle):
             prefix='cth-train-'
         ) as temporary:
             archive = Path(temporary) / 'training.zip'
-            sources = build_bundle(body, archive)
+            manifest = dataset_manifest.revalidate(job)
+            sources = build_bundle(body, archive, manifest)
+            dataset_manifest.revalidate(job)
 
             bridge = RuntimeBridge(RUNTIME_NAME, T4_SPEC)
             preflight = preflight_record(body.project_id)
@@ -607,6 +607,7 @@ def prepare_job(job, body, handle):
                     ),
                 )
 
+            dataset_manifest.revalidate(job)
             launched = True
 
             bridge.execute(
@@ -676,6 +677,16 @@ def start_training(body: StartTraining, request: Request):
         job = {'job_id': uuid4().hex, 'project_id': body.project_id, 'model_name': body.model_name,
                'status': 'queued', 'message': 'Permintaan diterima; training belum mulai.',
                'autosave_enabled': True, 'backup_status': 'waiting'}
+        manifest = dataset_manifest.verify_selection(body.project_id, body.dataset_ids, body.source_receipts)
+        from app.source_analysis import analyze_selection
+        report = analyze_selection(body.project_id, [item['dataset_id'] for item in manifest['datasets']], force=True)
+        if report['training_samples'] == 0:
+            raise HTTPException(409, 'Pilihan hanya berisi fakta sumber. Pilih berkas latihan untuk training baru.')
+        if not report['sources_ready'] and not body.acknowledge_empty_sources:
+            raise HTTPException(409, report['warning'] + ' Konfirmasi acknowledge_empty_sources hanya bila memang ingin latihan tanpa sumber.')
+        job['source_analysis'] = report
+        job['dataset_manifest_sha256'] = dataset_manifest.freeze(job['job_id'], manifest)
+        job['dataset_count'] = len(manifest['datasets'])
         save_job(job, _replace=True)
         threading.Thread(target=prepare_job, args=(job, body, handle), daemon=True).start()
         return job

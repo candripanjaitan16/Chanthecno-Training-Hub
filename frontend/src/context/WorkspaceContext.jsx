@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { getDriveStatus, getProjects, createProject } from "../services/api";
+import { getDriveStatus, getProjects, createProject, getLocalState } from "../services/api";
 
 import { listDatasets, uploadDataset, saveDatasetUrl, deleteDataset, syncDataset } from "../services/datasets";
 
@@ -67,9 +67,25 @@ export function WorkspaceProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    getLocalState(controller.signal).then(({ generation }) => {
+      if (controller.signal.aborted || !generation) return;
+      try {
+        const previous = localStorage.getItem("cth-generation");
+        if (previous !== generation && generation !== "initial") {
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith("cth-")) localStorage.removeItem(key);
+          }
+          setSelectedId("");
+          setDrafts({});
+          setDatasetLists({});
+        }
+        localStorage.setItem("cth-generation", generation);
+      } catch { /* Storage may be disabled. */ }
+    }).catch(() => {});
     refreshProjects();
     refreshDrive();
-    return () => { projectsRequest.current?.abort(); driveRequest.current?.abort(); };
+    return () => { controller.abort(); projectsRequest.current?.abort(); driveRequest.current?.abort(); };
   }, [refreshProjects, refreshDrive]);
 
   useEffect(() => {

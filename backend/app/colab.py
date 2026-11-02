@@ -1,11 +1,8 @@
 import fcntl
 import json
-import os
 import re
-import tempfile
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,7 +20,9 @@ router = APIRouter(
     tags=["Google Colab"],
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from app.paths import DATA_HOME, prepare
+
+BASE_DIR = DATA_HOME
 API_URL = "https://colaboratory.googleapis.com/v1beta"
 STATE_FILE = BASE_DIR / "colab_runtime_state.json"
 LOCK_FILE = BASE_DIR / ".colab-runtime.lock"
@@ -57,32 +56,13 @@ def load_state():
 
 
 def save_state(data):
-    temporary = None
-
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=BASE_DIR,
-            prefix=".cth-colab-",
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-
-            json.dump(data, handle, indent=2)
-
-            handle.flush()
-            os.fsync(handle.fileno())
-
-        os.replace(temporary, STATE_FILE)
-
-    finally:
-        if temporary and temporary.exists():
-            temporary.unlink()
+    from app.storage import atomic_json
+    atomic_json(STATE_FILE, data)
 
 
 @contextmanager
 def runtime_lock():
+    prepare()
     with LOCK_FILE.open("a") as handle:
         try:
             fcntl.flock(
@@ -331,7 +311,6 @@ import fcntl
 import json
 import subprocess
 from contextlib import ExitStack
-from pathlib import Path
 
 result = {"ok": True, "safe": False}
 

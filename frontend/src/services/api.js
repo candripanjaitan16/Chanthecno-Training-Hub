@@ -1,4 +1,4 @@
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://127.0.0.1:8000" : "")).replace(/\/$/, "");
 
 async function request(path, { signal, timeout = 30000, ...options } = {}) {
   const controller = new AbortController();
@@ -44,3 +44,5 @@ export function createProject(project) {
     body: JSON.stringify(project),
   });
 }
+
+export function getLocalState(signal) { return request("/api/local-state", { signal }); }
