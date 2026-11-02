@@ -25,9 +25,10 @@ async def main():
             page.on('pageerror',lambda error:errors.append(str(error)))
             def report(ids):
                 qa = 'a'*32 in ids
-                facts = 'b'*32 in ids
+                approved = qa and sources[0]['source_mode']=='curated_qa'
+                facts = 'b'*32 in ids or approved
                 return {'files':[{'dataset_id':item['id'],'name':item['name'],'format':'conversation_qa' if item['id']=='a'*32 else 'plain_text',
-                         'searchable_quotes':0 if item['id']=='a'*32 else 1,'source_mode':item['source_mode'],'skipped_lines':2 if item['id']=='a'*32 else 0,
+                         'searchable_quotes':int(approved) if item['id']=='a'*32 else 1,'source_mode':item['source_mode'],'skipped_lines':(1 if approved else 2) if item['id']=='a'*32 else 0,
                          'skipped':[{'line':1,'reason':'percakapan latihan tidak otomatis dipercaya'}] if item['id']=='a'*32 else []} for item in sources if item['id'] in ids],
                         'training_samples':int(qa and sources[0]['source_mode']!='facts_only'),'qa_pairs':int(qa),'searchable_quotes':int(facts),'skipped_lines':2*int(qa),
                         'sources_ready':facts,'warning':None if facts else 'Indeks sumber kosong. Pisahkan berkas fakta proyek dari percakapan latihan.'}
@@ -42,7 +43,7 @@ async def main():
                     await route.continue_(); return
                 calls.append((req.method,path,req.post_data_json if req.post_data and 'json' in req.headers.get('content-type','') else None))
                 if path=='/api/app/status':
-                    data={'version':'1.1.1','installation':'installed','notice':None,'changes':[],'update':{'status':'not_checked','message':'Belum diperiksa'}}
+                    data={'version':'1.1.2','installation':'installed','notice':None,'changes':[],'update':{'status':'not_checked','message':'Belum diperiksa'}}
                 elif path=='/api/local-state': data={'generation':'initial'}
                 elif path=='/api/projects/': data=[{'id':1,'name':'Alpha','model_name':'chanthecno-alpha'}]
                 elif path=='/api/connections/google-drive': data={'status':'connected','message':'Fixture offline'}
@@ -61,7 +62,7 @@ async def main():
                     data={'status':'available','job_id':'a'*32,'sources_ready':updated,'source_analysis':report(['b'*32] if updated else ['a'*32]),'source_warning':None if updated else 'Indeks sumber kosong. Tidak ada kutipan proyek yang siap dicari.'}
                 elif path=='/api/model-testing/restore':
                     assert req.post_data_json['refresh_sources'] is True
-                    assert req.post_data_json['source_dataset_ids']==['b'*32]
+                    assert req.post_data_json['source_dataset_ids']==['a'*32]
                     updated=True
                     data={'status':'completed','job_id':'a'*32,'source_analysis':report(['b'*32]),'message':'Indeks fakta fixture diperbarui tanpa training'}
                 elif path=='/api/model-testing/restore/1': data={'status':'completed' if updated else 'idle','job_id':'a'*32,'source_analysis':report(['b'*32] if updated else ['a'*32])}
@@ -83,16 +84,19 @@ async def main():
             await page.goto('http://127.0.0.1:8765/#datasets')
             await page.get_by_label('Peran percakapan.txt').select_option('facts_only')
             await expect(page.get_by_text('0 kutipan dapat dicari',exact=False)).to_be_visible()
+            await page.get_by_label('Peran percakapan.txt').select_option('curated_qa')
+            await expect(page.get_by_text('1 kutipan dapat dicari',exact=False)).to_be_visible()
+            assert any(path.endswith('/source-mode') and body=={'source_mode':'curated_qa'} for _,path,body in calls)
             await page.goto('http://127.0.0.1:8765/#testing')
             await expect(page.locator('.mt-state-note[role="alert"]')).to_contain_text('Indeks sumber kosong')
             await page.locator('.mt-details > summary').click()
-            await page.get_by_role('checkbox',name=re.compile('fakta-proyek.txt')).check()
+            await page.get_by_role('checkbox',name=re.compile('percakapan.txt')).check()
             await page.get_by_role('button',name='Perbarui sumber tanpa training',exact=True).click()
             await expect(page.locator('.mt-state-note[role="alert"]')).to_have_count(0)
             assert updated
             assert not any(path.endswith('/training/start') for _,path,_ in calls)
             assert not errors,errors
-            print('PASS QA counts/empty warning, explicit facts separation, no implicit assistant trust, facts-only reindex of saved model without training (all API mocks)')
+            print('PASS QA counts/empty warning, explicit facts separation, no implicit assistant trust, approved QA reindex of saved model without training (all API mocks)')
             await browser.close()
     finally:
         server.terminate();server.wait(timeout=5)

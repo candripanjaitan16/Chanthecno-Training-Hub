@@ -1,4 +1,4 @@
-"""Conservative, bounded extraction of documentary evidence, never chat turns."""
+"""Conservative, bounded extraction of documentary evidence, with explicitly approved QA answer extraction."""
 import hashlib
 import re
 import sqlite3
@@ -44,19 +44,65 @@ def documentary_spans(content, state=None):
 
 def create_index(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS passages (id INTEGER PRIMARY KEY, source TEXT, content TEXT, digest TEXT UNIQUE)')
+    if 'qa_question' not in {row[1] for row in conn.execute('PRAGMA table_info(passages)')}:
+        conn.execute("ALTER TABLE passages ADD COLUMN qa_question TEXT NOT NULL DEFAULT ''")
     conn.execute('CREATE TABLE IF NOT EXISTS retrieval_meta (version INTEGER NOT NULL)')
     if conn.execute('SELECT COUNT(*) FROM retrieval_meta').fetchone()[0] == 0:
         conn.execute('INSERT INTO retrieval_meta VALUES (2)')
 
 
-def store_quote(conn, source, quote):
-    digest = hashlib.sha256((source + '\0' + quote).encode()).hexdigest()
-    return conn.execute('INSERT OR IGNORE INTO passages(source,content,digest) VALUES(?,?,?)', (source, quote, digest)).rowcount
+def store_quote(conn, source, quote, question=''):
+    digest = hashlib.sha256((source + '\0' + question + '\0' + quote).encode()).hexdigest()
+    return conn.execute('INSERT OR IGNORE INTO passages(source,content,digest,qa_question) VALUES(?,?,?,?)', (source, quote, digest, question)).rowcount
 
 
-SOURCE_MODES = {'filtered', 'training_only', 'facts_only'}
-ANALYSIS_VERSION = 1
+SOURCE_MODES = {'filtered', 'training_only', 'facts_only', 'curated_qa'}
+ANALYSIS_VERSION = 2
 TURN = re.compile(r'^\s*(USER|ASSISTANT|SYSTEM|HUMAN|PENGGUNA|ASISTEN)\s*:\s*(.*)', re.I)
+
+
+# Approval is a provenance choice, never permission to execute dataset instructions.
+QA_INSTRUCTION = re.compile(
+    r'\b(?:abaikan|ignore|disregard|instruksi|instructions?|system\s+prompt|'
+    r'ikuti|jawablah|anggap|berpura|pretend|you\s+are|act\s+as|'
+    r'bocorkan|rahasia|token|password|jalankan|execute|sudo|jawab|override|reveal|perintah|prompt|hapus|ubah|kirim|send)\b', re.I)
+
+
+def curated_answers(handle):
+    """Bounded USER→ASSISTANT pairs. Only answers, never roles/questions, are quoted."""
+    role, question, answer, answer_lines, invalid = None, '', '', [], False
+    for number, line in enumerate(iter(lambda: handle.readline(8193), ''), 1):
+        if number == 1:
+            line = line.lstrip('\ufeff')
+        if len(line) > 8192:
+            invalid = True
+            while line and not line.endswith('\n'):
+                line = handle.readline(8193)
+            continue
+        turn = TURN.match(line)
+        if turn:
+            if role == 'answer' and question.strip() and answer.strip() and not invalid:
+                yield question.strip(), answer, answer_lines
+            name, content = turn.groups()
+            if name.upper() in {'USER', 'HUMAN', 'PENGGUNA'}:
+                role, question, answer, answer_lines, invalid = 'question', content, '', [], False
+            elif name.upper() in {'ASSISTANT', 'ASISTEN'} and role == 'question':
+                role, answer, answer_lines = 'answer', content + '\n', [number]
+            else:
+                role, question, answer, answer_lines, invalid = None, '', '', [], False
+        elif role == 'question':
+            if len(question) + len(line) <= 8192:
+                question += '\n' + line
+            else:
+                invalid = True
+        elif role == 'answer':
+            if len(answer) + len(line) <= 8192:
+                answer += line
+                answer_lines.append(number)
+            else:
+                invalid = True
+    if role == 'answer' and question.strip() and answer.strip() and not invalid:
+        yield question.strip(), answer, answer_lines
 
 
 def index_source(conn, source, handle, source_mode='filtered'):
@@ -114,8 +160,9 @@ def index_source(conn, source, handle, source_mode='filtered'):
             quotes = list(documentary_spans(line, state))
             if not state['blocked'] and line.strip() and not ROLE.search(line):
                 plain_lines += 1
-            if source_mode == 'training_only':
-                reason = 'berkas khusus latihan; tidak menjadi sumber'
+            if source_mode in {'training_only', 'curated_qa'}:
+                reason = ('bukan kutipan QA terkurasi yang lolos filter (role/pertanyaan/instruksi/duplikat)' if source_mode == 'curated_qa'
+                          else 'berkas khusus latihan; tidak menjadi sumber')
             elif quotes:
                 added = sum(store_quote(conn, source, quote) for quote, _, _ in quotes)
                 report['searchable_quotes'] += added
@@ -127,6 +174,25 @@ def index_source(conn, source, handle, source_mode='filtered'):
             report['skipped_lines'] += 1
             if len(report['skipped']) < 25:
                 report['skipped'].append({'line': report['lines'], 'reason': reason})
+    if source_mode == 'curated_qa':
+        handle.seek(0)
+        accepted_lines = set()
+        accepted_count = 0
+        detailed_lines = {item['line'] for item in report['skipped']}
+        for prompt, answer, line_numbers in curated_answers(handle):
+            if QA_INSTRUCTION.search(prompt + '\n' + answer) or ROLE.search(prompt + answer):
+                continue
+            quotes = list(documentary_spans(answer))
+            added = sum(store_quote(conn, source, quote, prompt if len(quotes) == 1 else '') for quote, _, _ in quotes)
+            report['searchable_quotes'] += added
+            if added:
+                for number, line in zip(line_numbers, answer.splitlines()):
+                    if any(quote in line for quote, _, _ in quotes):
+                        accepted_count += 1
+                        if number in detailed_lines:
+                            accepted_lines.add(number)
+        report['skipped_lines'] = max(0, report['skipped_lines'] - accepted_count)
+        report['skipped'] = [item for item in report['skipped'] if item['line'] not in accepted_lines]
     report['sources_ready'] = report['searchable_quotes'] > 0
     report['format'] = ('mixed' if plain_lines else 'conversation_qa') if role_lines else 'plain_text'
     report['training_samples'] = 0 if source_mode == 'facts_only' else (characters + 15999) // 16000
@@ -142,7 +208,7 @@ def source_summary(reports, details=False):
             'qa_pairs': sum(item['qa_pairs'] for item in reports),
             'skipped_lines': sum(item['skipped_lines'] for item in reports),
             'sources_ready': quotes > 0,
-            'warning': None if quotes else 'Indeks sumber kosong. Tidak ada kutipan yang dapat dicari; percakapan latihan tidak otomatis menjadi fakta. Pisahkan berkas fakta proyek.'}
+            'warning': None if quotes else 'Indeks sumber kosong. Tidak ada kutipan yang dapat dicari; percakapan latihan tidak otomatis menjadi fakta. Setujui QA terkurasi yang telah diperiksa atau pisahkan berkas fakta proyek.'}
 
 
 def retrieve(database, question, limit=3):
@@ -162,14 +228,16 @@ def retrieve(database, question, limit=3):
             return []
         if version != (2,):
             return []
-        for passage_id, source, content in conn.execute('SELECT id,source,content FROM passages'):
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(passages)')}
+        question_column = 'qa_question' if 'qa_question' in columns else "''"
+        for passage_id, source, content, prompt in conn.execute(f'SELECT id,source,content,{question_column} FROM passages'):
             for quote, start, end in documentary_spans(content):
                 tokens = words(quote)
-                overlap = keys & tokens
+                overlap = keys & (tokens | words(prompt))
                 coverage = len(overlap) / len(keys)
                 if coverage < 1:
                     continue
-                if identity_question and not IDENTITY.search(quote):
+                if identity_question and not IDENTITY.search(quote + ' ' + prompt):
                     continue
                 # Prefer concise sentences covering the question rather than large keyword dumps.
                 score = coverage + len(overlap) / max(len(tokens), 1)

@@ -1,9 +1,8 @@
 {
-  "version": "1.1.1",
+  "version": "1.1.2",
   "changes": [
-    "Deteksi format USER/ASSISTANT, jumlah pasangan QA, unit latihan dan kutipan indeks dilaporkan terpisah.",
-    "Peran berkas eksplisit memisahkan fakta proyek dari percakapan latihan tanpa mengubah TXT asli.",
-    "Indeks sumber kosong diberi peringatan sebelum training dan saat pemulihan model.",
-    "Sumber model tersimpan dapat diperbarui dari berkas fakta terverifikasi tanpa training ulang."
+    "Pilihan QA terkurasi eksplisit mengindeks jawaban relevan tanpa penanda role atau pertanyaan lain.",
+    "Filter instruksi, peringatan indeks kosong, dan verifikasi Drive tetap berlaku.",
+    "Sumber model tersimpan dapat diperbarui dari QA terkurasi tanpa training ulang."
   ]
 }

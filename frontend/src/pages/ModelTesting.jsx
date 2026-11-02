@@ -137,7 +137,7 @@ export default function ModelTesting({ onNavigate }) {
 
   const selectedModel = models.find((item) => item.job_id === selected);
 
-  const factSources = datasets.filter(item => item.type === "txt" && item.source_mode === "facts_only");
+  const factSources = datasets.filter(item => item.type === "txt" && ["facts_only", "curated_qa"].includes(item.source_mode));
   const selectedFacts = factSources.filter(item => sourceDatasetIds.includes(item.id));
   const factsReady = selectedFacts.length > 0 && selectedFacts.every(item => item.drive_status === "saved" && item.local_saved);
 
@@ -603,8 +603,8 @@ export default function ModelTesting({ onNavigate }) {
                 <p>{model?.training_sample_counts ? `Sampel aktual run tercatat: train ${model.training_sample_counts.train || 0} · evaluasi ${model.training_sample_counts.eval || 0}` : "Jumlah sampel training aktual belum tersedia dari catatan run ini."}</p>
                 <SourceAnalysis report={model?.source_analysis || restore.source_analysis} />
                 <h3>Fakta proyek untuk model ini</h3>
-                <p>Pilih berkas fakta yang terpisah dari percakapan latihan. Ini memperbarui indeks inferensi, bukan melatih ulang atau mengubah manifest run lama.</p>
-                {!factSources.length && <p>Belum ada berkas fakta proyek. Atur perannya di halaman Datasets.</p>}
+                <p>Pilih fakta proyek atau QA terkurasi yang sudah Anda setujui sebagai sumber. Ini memperbarui indeks inferensi, bukan melatih ulang atau mengubah manifest run lama.</p>
+                {!factSources.length && <p>Belum ada fakta proyek atau QA terkurasi disetujui. Atur perannya di halaman Datasets.</p>}
                 {factSources.map(item => <label key={item.id} style={{ display: "block", overflowWrap: "anywhere" }}><input type="checkbox" disabled={busy} checked={sourceDatasetIds.includes(item.id)} onChange={event => setSourceDatasetIds(previous => event.target.checked ? [...previous, item.id] : previous.filter(id => id !== item.id))} /> {item.name} · {item.drive_status === "saved" ? "Drive terverifikasi" : "belum terverifikasi"}</label>)}
                 <button type="button" disabled={busy || !selected || !factsReady} onClick={() => restoreModel(true)}>Perbarui sumber tanpa training</button>
                 <button

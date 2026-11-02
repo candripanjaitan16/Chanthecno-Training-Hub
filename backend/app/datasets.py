@@ -287,7 +287,7 @@ def analyze_sources(project_id: int, body: AnalysisSelection, request: Request):
 
 
 class SourceMode(BaseModel):
-    source_mode: Literal['filtered', 'training_only', 'facts_only']
+    source_mode: Literal['filtered', 'training_only', 'facts_only', 'curated_qa']
 
 
 @router.patch('/projects/{project_id}/{source_id}/source-mode')

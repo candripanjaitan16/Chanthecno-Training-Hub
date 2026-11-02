@@ -6,7 +6,7 @@ Dijalankan pada cloud Linux, Python **3.10.12 dan 3.12.14**, Node 24.19.0/npm 11
 
 | Pemeriksaan | Hasil |
 | --- | --- |
-| `python -m unittest discover -s tests -v` | **104 tes offline lulus pada masing-masing interpreter** |
+| `python -m unittest discover -s tests -v` | **113 tes offline lulus pada masing-masing interpreter** |
 | `npm --prefix frontend run build` | Lulus, frontend produksi dibangun |
 | `npm --prefix frontend run lint` | Exit 0; 18 warning kode React yang masih perlu perbaikan terpisah |
 | `python3 tests/smoke_install.py` | Instalasi nyata dua kali pada Python 3.10.12 dan 3.12.14, interpreter virtualenv cocok, production HTTP/asset, pengunci pembaruan, shutdown SIGTERM, proses lain dipertahankan, uninstall dengan data/konfigurasi tetap ada |
@@ -57,6 +57,14 @@ Starlette saat ini menampilkan peringatan deprecation kompatibilitas TestClient/
 - Pemulihan QA-only membuat indeks valid tetapi kosong dan menyimpan laporan nol kutipan. Status/hasil pemulihan menampilkan peringatan, bukan klaim sumber siap. Model Testing membedakan hitungan sumber dari jumlah sampel aktual run yang tercatat atau belum tersedia.
 - Overlay fakta untuk model tersimpan diverifikasi melalui Drive mock dan memicu begin_restore, bukan prepare_job/training. Catatan current/history training tetap tidak berubah. Pemulihan hanya mengganti indeks dan penandanya setelah memeriksa checksum bobot lama; berkas asli/model/manifest training dipertahankan. Tindakan ini hanya terjadi sesudah pilihan fakta dan refresh_sources eksplisit.
 - Browser menguji peringatan dan tombol start yang tertahan untuk QA-only, hilangnya peringatan setelah fakta terpisah dipilih, QA yang tetap nol kutipan meskipun perannya diubah, serta tombol Perbarui sumber tanpa training. Seluruh API diintersep mock dan tidak ada POST training/start pada skenario tersebut. Screenshot merupakan fixture, bukan bukti inferensi model nyata.
+
+## QA terkurasi eksplisit CTH 1.1.2
+
+- Menambah `curated_qa` sebagai persetujuan per berkas, sementara default/filtered, training_only dan facts_only tetap menolak raw assistant. Peran tersimpan bersama checksum pada manifest versi dataset; perubahan peran tidak mengubah byte/checksum atau salinan Drive. Cache analisis memakai versi parser 2 agar laporan lama dihitung ulang.
+- Fixture identitas sama dalam teks biasa dan QA disetujui memberikan jawaban persis yang sama beserta nama sumber dan offset passage. USER/ASSISTANT dan pertanyaan tidak muncul dalam jawaban. Pertanyaan hanya menjadi metadata pencarian untuk jawaban satu kalimat; jawaban beberapa kalimat harus relevan per kalimat. Uji pasangan lain yang tidak terkait memastikan tidak ikut dikutip. Persetujuan bukan validasi kebenaran semantik atau bukti kualitas model generatif.
+- Pasangan tanpa persetujuan, jawaban orphan/SYSTEM, pasangan terlalu panjang, instruksi di pertanyaan/jawaban termasuk setelah heading Fakta, percakapan campuran, pertanyaan tanpa bukti dan QA multiline diuji offline. Teks asli tetap digunakan untuk persiapan latihan; tidak ada transformasi TXT diam-diam.
+- Backend start tetap memerlukan verifikasi Drive: status gagal ditolak walau QA sudah disetujui; QA terverifikasi dengan laporan positif dapat membentuk manifest lewat thread mock. Peringatan/acknowledgment indeks kosong dan isolasi proyek tetap diuji. Pembaruan sumber model memerlukan `refresh_sources` eksplisit, menerima QA disetujui, tidak memanggil prepare_job dan tidak mengubah riwayat training. Rebuild indeks QA diuji dengan download Drive mock.
+- 113 tes lulus pada Python 3.10.12 dan 3.12.14. Build produksi dan Chromium menguji pilihan QA eksplisit serta pembaruan sumber model dengan API mock. Tidak ada training, GPU, akses Drive/Colab nyata, atau release yang diterbitkan. Smoke installer nyata yang tercatat di tabel dijalankan pada patch 1.1.1; perubahan 1.1.2 tidak mengubah installer atau dependency.
 
 ## Batas bukti
 

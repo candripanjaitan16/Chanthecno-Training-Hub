@@ -354,11 +354,11 @@ def restore_model(body: RestoreRequest, request: Request):
     job = selected_job(body.project_id, body.job_id)
     if body.refresh_sources:
         if not body.source_dataset_ids:
-            raise HTTPException(400, 'Pilih berkas fakta proyek untuk memperbarui sumber.')
+            raise HTTPException(400, 'Pilih fakta proyek atau QA terkurasi disetujui untuk memperbarui sumber.')
         from app.dataset_manifest import verify_selection
         sources = verify_selection(body.project_id, body.source_dataset_ids)['datasets']
-        if any(item.get('source_mode') != 'facts_only' for item in sources):
-            raise HTTPException(409, 'Pembaruan sumber eksplisit hanya menerima berkas berperan fakta proyek, bukan percakapan latihan.')
+        if any(item.get('source_mode') not in {'facts_only', 'curated_qa'} for item in sources):
+            raise HTTPException(409, 'Pembaruan sumber eksplisit hanya menerima fakta proyek atau QA terkurasi yang disetujui eksplisit.')
         job = {**job, 'inference_sources': sources}
         return begin_restore(job, open_bridge)
     if body.source_dataset_ids:

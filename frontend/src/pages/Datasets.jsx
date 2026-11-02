@@ -198,10 +198,10 @@ export default function Datasets({ onNavigate }) {
                             const mode = event.target.value;
                             perform("Mengubah peran sumber…", async id => { await setSourceMode(id, source.id, mode); await refreshDatasets(id); });
                           }}>
-                            <option value="filtered">Latihan + sumber tersaring</option><option value="training_only">Khusus percakapan/latihan</option><option value="facts_only">Fakta proyek saja (tanpa training)</option>
+                            <option value="filtered">Latihan + sumber tersaring</option><option value="training_only">Khusus percakapan/latihan</option><option value="curated_qa">QA terkurasi disetujui (latihan + sumber)</option><option value="facts_only">Fakta proyek saja (tanpa training)</option>
                           </select></label>
                           {source.analysis && <SourceAnalysis report={{ ...source.analysis, files: [source.analysis] }} />}
-                          <small>Peran tidak mengubah isi TXT. Fakta proyek tetap melewati filter; jawaban ASSISTANT tidak otomatis dimasukkan. Sumber model lama diperbarui secara eksplisit di Model Testing.</small>
+                          <small>Peran tidak mengubah isi TXT. Pilih QA terkurasi hanya setelah memeriksa seluruh pasangan dalam berkas; ini persetujuan eksplisit sebagai sumber, bukan verifikasi kebenaran otomatis. Instruksi dataset tetap disaring. Sumber model lama diperbarui secara eksplisit di Model Testing.</small>
                         </>}
 
                       </div>

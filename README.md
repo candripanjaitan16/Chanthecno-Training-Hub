@@ -1,6 +1,6 @@
 # Chanthecno Training Hub
 
-Versi aplikasi: **1.1.1**. Ini versi kode/build; bukan pernyataan bahwa GitHub Release 1.1.1 sudah diterbitkan.
+Versi aplikasi: **1.1.2**. Ini versi kode/build; bukan pernyataan bahwa GitHub Release 1.1.2 sudah diterbitkan.
 
 Dashboard lokal untuk dataset proyek, fine-tuning LoRA di Google Colab T4, cadangan Google Drive, pemulihan model, dan pengujian chat. Aplikasi memakai React/Vite, FastAPI, dan SQLite. Model dasar tetap `Qwen/Qwen2.5-0.5B-Instruct`; nama model proyek adalah nama adapter hasil fine-tuning, bukan model yang dilatih dari nol.
 
@@ -125,7 +125,7 @@ Uninstall menghapus rilis program dan tautan perintah milik installer, **mempert
 - Hentikan training meminta stop kooperatif setelah langkah optimizer dan penyimpanan checkpoint. **Stop & Simpan** berbeda: runtime hanya boleh dihentikan setelah cadangan dalam cakupan yang disetujui terverifikasi. Arsip workspace bukan otomatis model selesai atau GGUF.
 - Cadangan adapter mencakup tokenizer dan metadata; hasil diperiksa dengan ukuran/checksum. Arsip lokal dipertahankan saat upload gagal. Retry cadangan tidak menjalankan training ulang. Ekstraksi membatasi entri, ukuran, path, symlink dan checksum.
 
-## Format dataset, sampel latihan, dan sumber pencarian (1.1.1)
+## Format dataset, sampel latihan, dan sumber pencarian (1.1.2)
 
 TXT berformat `USER:/ASSISTANT:` dideteksi sebagai percakapan QA, tetapi jawaban assistant **tidak otomatis dipercaya** sebagai fakta. Teks biasa, percakapan, dan campuran dilaporkan terpisah. Contoh berikut sengaja berbeda peran walaupun isi jawabannya sama:
 
@@ -134,7 +134,7 @@ USER: Siapa pembuat Proyek Contoh?
 ASSISTANT: Proyek Contoh dikembangkan oleh Tim Contoh.
 ```
 
-Pasangan itu dapat dipakai untuk latihan, tetapi menghasilkan **nol kutipan**. Untuk sumber, tulis fakta yang telah diperiksa pada berkas terpisah, misalnya `fakta-proyek.txt`:
+Secara default pasangan itu dipakai untuk latihan tetapi menghasilkan **nol kutipan**. Setelah memeriksa semua pasangan dalam berkas, pilih **QA terkurasi disetujui** untuk mengizinkan jawabannya menjadi sumber. Alternatifnya, tulis fakta pada berkas terpisah, misalnya `fakta-proyek.txt`:
 
 ```text
 Proyek Contoh dikembangkan oleh Tim Contoh.
@@ -146,9 +146,10 @@ Pada **Datasets → Peran berkas**, pilih secara eksplisit:
 | --- | --- | --- |
 | Latihan + sumber tersaring (`filtered`, default) | TXT asli | Hanya kalimat dokumenter yang lolos filter |
 | Khusus percakapan/latihan (`training_only`) | TXT asli | Tidak |
+| QA terkurasi disetujui (`curated_qa`) | TXT asli | Hanya jawaban pasangan USER→ASSISTANT yang lolos filter |
 | Fakta proyek saja (`facts_only`) | Tidak | Kalimat dokumenter yang lolos filter |
 
-Perbaikan ini memilih **pemisahan fakta proyek dan percakapan latihan**, bukan mengangkat seluruh jawaban ASSISTANT menjadi sumber terkurasi. Menandai file QA sebagai fakta proyek tetap tidak membuat giliran chat masuk indeks. Instruksi, soal, self-claim assistant, kelanjutan chat dan teks tidak memenuhi filter tetap dilewati. Filter bukan pemeriksa kebenaran semantik; fakta yang ditulis pengguna tetap perlu diverifikasi sendiri.
+**Persetujuan berlaku per berkas dan versi yang dipilih**, bukan otomatis untuk semua dataset. `filtered`, `training_only`, dan `facts_only` tetap tidak mengangkat jawaban ASSISTANT menjadi sumber. Dalam `curated_qa`, hanya jawaban dari pasangan USER→ASSISTANT yang lengkap diindeks; giliran SYSTEM, jawaban tanpa pertanyaan, penanda role, pertanyaan dan pasangan dengan instruksi tertanam dilewati. Jawaban dipecah menjadi kutipan kalimat, lalu dipilih menurut relevansi; pertanyaan disimpan hanya sebagai metadata pencarian untuk jawaban satu kalimat, tidak ditampilkan sebagai jawaban atau dikirim sebagai instruksi. Untuk jawaban beberapa kalimat, setiap kalimat harus relevan sendiri. Batas 8.192 karakter per pertanyaan/jawaban menjaga analisis terbatas; bagian terlalu panjang dilaporkan dilewati. Filter bukan pemeriksa kebenaran semantik atau jaminan menangkap semua prompt injection; periksa setiap pasangan sebelum menyetujui berkas. Isi latihan tidak disunting.
 
 **Analisis sumber** pada halaman Datasets dan pilihan Training Workspace memperlihatkan format, pasangan QA terdeteksi, unit latihan awal, jumlah kutipan unik yang dapat dicari, serta nomor baris/alasan bagian yang dilewati (rincian maksimal 25 per berkas). “Dilewati” berarti tidak masuk indeks, bukan dihapus dari berkas atau diam-diam dibuang dari latihan. Perubahan peran hanya menambah metadata aplikasi; byte TXT asli, ukuran, checksum dan salinan Drive tidak ditulis ulang. Pilihan peran ikut manifest run yang dibekukan.
 
@@ -158,9 +159,9 @@ Jika kutipan nol, UI menampilkan **Indeks sumber kosong** sebelum training. Back
 
 ### Memperbarui sumber model lama tanpa training ulang
 
-1. Tambahkan berkas fakta terpisah di Datasets, pilih peran **Fakta proyek saja**, periksa analisisnya, dan tunggu Drive terverifikasi.
+1. Di Datasets, pilih peran **QA terkurasi disetujui** setelah memeriksa isinya, atau tambahkan berkas **Fakta proyek saja**. Periksa analisisnya dan tunggu Drive terverifikasi.
 2. Pilih model tersimpan di **Model Testing → Detail model**.
-3. Centang berkas fakta yang benar, lalu klik **Perbarui sumber tanpa training**.
+3. Centang berkas fakta atau QA terkurasi yang benar, lalu klik **Perbarui sumber tanpa training**.
 
 Tindakan itu eksplisit: backend memeriksa proyek, peran, ukuran/checksum lokal/Drive, lalu membangun indeks inferensi baru dari fakta terpilih. Ini tidak menjalankan optimizer, tidak mengubah bobot adapter, isi TXT, riwayat job training atau manifest dataset run lama. Metadata indeks menyimpan nama, ID Drive dan checksum sumber yang dipakai. Pemulihan tetap memakai runtime proyek yang sesuai dan menolak pekerjaan aktif/tidak pasti.
 
