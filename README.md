@@ -1,5 +1,7 @@
 # Chanthecno Training Hub
 
+Versi aplikasi: **1.1.0**. Ini versi kode/build; bukan pernyataan bahwa GitHub Release 1.1.0 sudah diterbitkan.
+
 Dashboard lokal untuk dataset proyek, fine-tuning LoRA di Google Colab T4, cadangan Google Drive, pemulihan model, dan pengujian chat. Aplikasi memakai React/Vite, FastAPI, dan SQLite. Model dasar tetap `Qwen/Qwen2.5-0.5B-Instruct`; nama model proyek adalah nama adapter hasil fine-tuning, bukan model yang dilatih dari nol.
 
 ## Instalasi dari GitHub (Linux, tanpa sudo)
@@ -76,14 +78,28 @@ Akses Colab API, kuota, sesi, dan GPU tetap bergantung pada akun serta layanan G
 
 ## Pembaruan dan uninstall
 
-Tutup launcher sebelum pembaruan atau uninstall. Dari checkout GitHub yang sama:
+Versi terpasang tampil di bawah sidebar. Tombol **Periksa pembaruan** meminta endpoint publik GitHub Release stabil terbaru untuk repositori ini. Hanya respons valid dengan versi stabil yang dapat menghasilkan status “sama dengan release terbaru”. Jika belum ada release, jaringan/timeout gagal, API menolak akses, atau tag tidak dapat dibandingkan, UI menampilkan kondisi itu; tidak mengklaim aplikasi terbaru. Versi pengembangan yang lebih tinggi daripada release stabil diberi status terpisah.
+
+Pemeriksaan tidak memakai sesi Google, token akun, cookie, dataset, atau data proyek. Permintaan hanya memuat URL repositori tetap, header API publik dan versi CTH sebagai User-Agent; redirect tidak diikuti, TLS tetap diverifikasi. Timeout socket dan anggaran pembacaan 8 detik, respons maksimal 256 KiB, catatan release dibatasi 24.000 karakter dan ditampilkan sebagai teks. Hasil disimpan 15 menit; kegagalan dapat diperiksa kembali setelah setidaknya 60 detik. Respons 403/429 yang menyatakan batas API menghormati Retry-After/reset GitHub (dibatasi 24 jam). Beberapa tab tidak menjalankan pemeriksaan paralel.
+
+Jika tersedia pembaruan, panel menampilkan versi tujuan, catatan release dan perintah untuk **checkout baru**, bukan menjalankan `git pull` pada repository pengguna. Selesaikan pekerjaan, pastikan statusnya aman, kemudian tutup server. Ganti `vX.Y.Z` dengan tag stabil yang benar-benar dilaporkan GitHub:
 
 ```bash
-git pull --ff-only
+git clone --branch vX.Y.Z --single-branch https://github.com/candripanjaitan16/Chanthecno-Training-Hub.git cth-update-vX.Y.Z
+cd cth-update-vX.Y.Z
 python3 tools/install.py
+chanthecno-hub
 ```
 
-Rilis baru dipasang terpisah; virtualenv tidak dipindah setelah dibuat. Rilis aktif baru diganti setelah pemasangan/build sukses. Rilis lama dipertahankan. Installer tidak menghapus database, dataset, model lokal, konfigurasi, atau token, dan tidak menjalankan reset/migrasi data lama secara diam-diam. Perubahan lokal yang membuat `git pull --ff-only` gagal perlu diselesaikan sendiri tanpa force/reset.
+Gunakan direktori tujuan yang belum ada; jangan menimpa checkout atau perubahan lokal lama. Tidak ada perintah Git otomatis yang memodifikasi repository pengguna. Gunakan interpreter Python terpisah bila diperlukan sesuai bagian instalasi.
+
+Installer menolak pembaruan/uninstall saat launcher/API masih hidup, training/pemulihan/pencadangan aktif atau tidak pasti, sinkronisasi masih berjalan, atau catatan status rusak. Ini pemeriksaan lokal yang konservatif, bukan pemeriksaan Google baru. Periksa pekerjaan memakai versi lama dan selesaikan statusnya dahulu; jangan menghapus file status untuk melewati pengaman.
+
+Rilis baru dipasang terpisah; virtualenv tidak dipindah setelah dibuat. Sesudah dependency/build berhasil, installer menyalakan backend baru di direktori data/config sementara, memeriksa versi HTTP dan frontend/aset, lalu menghentikan proses probe miliknya. Baru setelah itu tautan rilis aktif diganti secara atomik. Kegagalan dependency/build/startup tidak mengganti rilis aktif; kegagalan pemasangan tautan perintah mengembalikan tautan sebelumnya. Rilis lama, database, dataset, konfigurasi, token dan model tetap dipertahankan. Probe tidak memakai data pengguna atau layanan Google.
+
+**Unduhan/build/probe selesai bukan pemberitahuan update berhasil.** Sesudah pengguna menjalankan rilis baru dan API versi tersebut benar-benar melayani UI, aplikasi menampilkan **“Berhasil diperbarui ke versi …”** dan panel **“Yang baru”**. Setelah panel dirender, UI mencatat versi yang telah dilihat pada `data/updates/seen.json`; restart berikutnya tidak mengulang pemberitahuan. Jika penyimpanan gagal, UI menjelaskan bahwa pemberitahuan bisa muncul kembali dan menyediakan retry. Instalasi pertama serta pemasangan ulang versi yang sama tidak dianggap update. Cache pemeriksaan tersimpan di `data/updates/check.json`. Catatan versi terpasang berasal dari `release-notes.json` yang ikut installer, bukan dari release GitHub yang belum dijalankan.
+
+Nomor versi utama berada di `backend/app/version.py`; API, `chanthecno-hub --version` dan `python3 tools/install.py --version` memakai nilai itu. Metadata frontend, catatan versi dan dokumentasi diselaraskan serta diuji. Penerbitan release tetap tindakan terpisah; pengujian fitur ini tidak menerbitkan release sungguhan.
 
 ```bash
 chanthecno-hub uninstall

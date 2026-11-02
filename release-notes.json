@@ -1,0 +1,9 @@
+{
+  "version": "1.1.0",
+  "changes": [
+    "Versi terpasang dan pemeriksaan GitHub Release stabil dengan status jaringan yang sebenarnya.",
+    "Pembaruan melalui checkout GitHub terpisah, pengaman pekerjaan aktif, dan uji startup sebelum aktivasi.",
+    "Notifikasi dan panel Yang baru setelah versi baru berjalan; instalasi pertama tidak dianggap pembaruan.",
+    "Dukungan Python 3.10.12, verifikasi dataset Drive sebelum training, dan kutipan sumber yang disaring."
+  ]
+}

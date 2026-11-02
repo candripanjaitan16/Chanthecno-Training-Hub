@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / 'backend/.venv/bin/python'
 sys.path.insert(0, str(ROOT / 'backend'))
 from app.paths import STATE_HOME, prepare
+from app.version import VERSION
 
 
 def stop_process(process):
@@ -34,6 +35,7 @@ def stop_process(process):
 
 def main():
     parser = argparse.ArgumentParser(description='ChanThecno Training Hub')
+    parser.add_argument('--version', action='version', version=f'CTH {VERSION}')
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('command', nargs='?', choices=['reset-local', 'restore-local', 'connect-drive', 'connect-colab', 'uninstall'])
     parser.add_argument('--backup', type=Path, help='Backup directory for restore-local')

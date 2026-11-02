@@ -36,7 +36,9 @@ async def main():
                     await request_route.continue_()
                     return
                 data={}
-                if path=='/api/local-state':
+                if path == '/api/app/status':
+                    data = {'version': '1.1.0', 'installation': 'installed', 'notice': None, 'changes': [], 'update': {'status': 'not_checked', 'message': 'Belum diperiksa'}}
+                elif path == '/api/local-state':
                     data={'generation':'initial'}
                 elif path=='/api/projects/':
                     data=[{'id':1,'name':'Alpha','model_name':'chanthecno-alpha'},{'id':2,'name':'Beta','model_name':'chanthecno-beta'}]

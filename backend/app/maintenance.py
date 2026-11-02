@@ -51,16 +51,29 @@ def require_inactive():
     candidates.extend((DATA_HOME / 'workspace').glob('**/current.json'))
     candidates.extend((DATA_HOME / 'workspace').glob('**/restore-*.json'))
     for path in candidates:
+        if path.is_symlink():
+            raise ValueError('Status berupa symlink; pemeliharaan ditolak.')
         if not path.exists():
             continue
-        if path.is_symlink():
-            raise ValueError('Status berupa symlink; reset ditolak.')
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError('Catatan status terlalu besar; pemeliharaan ditolak.')
         record = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(record, dict):
+            raise ValueError('Catatan status tidak valid; pemeliharaan ditolak.')
         if record.get('status') not in TERMINAL:
-            raise ValueError('Pekerjaan/runtime aktif atau status tidak pasti. Periksa dan selesaikan pekerjaan sebelum reset.')
+            raise ValueError('Pekerjaan/runtime aktif atau status tidak pasti. Periksa dan selesaikan pekerjaan sebelum pemeliharaan.')
         training = record.get('training_status')
         if training is not None and training not in TERMINAL:
-            raise ValueError('Status training belum aman untuk reset.')
+            raise ValueError('Status training belum aman untuk pemeliharaan.')
+        if record.get('backup_status') in {'uploading', 'downloading', 'pending', 'preparing', 'uncertain', 'unknown'}:
+            raise ValueError('Pencadangan aktif atau belum pasti; pemeliharaan ditolak.')
+
+    database = DATA_HOME / 'cth.db'
+    if database.is_file():
+        with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as conn:
+            exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cth_datasets'").fetchone()
+            if exists and conn.execute("SELECT 1 FROM cth_datasets WHERE deleted_at IS NULL AND drive_status IN ('syncing','verifying') LIMIT 1").fetchone():
+                raise ValueError('Sinkronisasi dataset aktif atau belum pasti. Periksa sebelum pemeliharaan.')
 
 
 def verify_backup(folder):
