@@ -73,7 +73,7 @@ def verify_selection(project_id, dataset_ids=None, source_receipts=None):
             update(row, drive_status='failed', error='Verifikasi ID/folder/ukuran/checksum Drive gagal. Salinan lokal dipertahankan.', next_retry=time.time()+60)
             raise HTTPException(409, 'Dataset Drive belum cocok/terjangkau. Worker tidak diluncurkan; periksa dan retry sinkronisasi.') from None
         manifest.append({
-            'dataset_id': row['id'], 'project_id': project_id,
+            'dataset_id': row['id'], 'project_id': project_id, 'source_mode': row.get('source_mode', 'filtered'),
             'file_id': remote['file_id'], 'folder_id': remote['folder_id'],
             'name': row['name'], 'drive_name': remote['name'],
             **expected, 'checksum_method': remote['checksum_method'],

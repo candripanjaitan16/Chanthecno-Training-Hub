@@ -33,12 +33,15 @@ def selected_job(project_id, job_id=None):
 
 
 def model_state(project_id, job):
+    stats = (job or {}).get('dataset_stats')
+    counts = stats.get('counts') if isinstance(stats, dict) else None
     base = {
         "project_id": project_id,
         "model_name": (job or {}).get("model_name"),
         "run_id": (job or {}).get("run_id"),
         "loaded": False,
         "job_id": (job or {}).get("job_id"),
+        "training_sample_counts": counts,
     }
     if not job:
         return {**base, "status": "missing", "message": "Belum ada catatan training untuk proyek ini."}
@@ -95,6 +98,26 @@ def inspect_model(bridge, project_id, job):
             adapter, {"adapter_config.json", "adapter_model.safetensors", "tokenizer_config.json"}
         )
     return False
+
+
+def source_index_state(bridge, project_id, job):
+    from app.training_backup import read_json_file
+    for prefix in ('', 'content/'):
+        try:
+            path = f"{prefix}cth/projects/{project_id}/training_results/{job['run_id']}/source-index-version.json"
+            marker = read_json_file(bridge, path, missing_ok=True)
+            if not isinstance(marker, dict):
+                continue
+            report = marker.get('source_analysis')
+            if isinstance(report, dict) and isinstance(report.get('searchable_quotes'), int):
+                count = report['searchable_quotes']
+                if count >= 0:
+                    return {'sources_ready': count > 0, 'source_analysis': report,
+                            'source_warning': None if count else 'Indeks sumber kosong. Model dapat memakai pengetahuan umum; tidak ada kutipan proyek yang siap dicari.'}
+        except Exception:
+            pass
+    return {'sources_ready': None, 'source_analysis': None,
+            'source_warning': 'Jumlah kutipan sumber belum dapat diverifikasi. Jangan menganggap indeks siap; periksa/pulihkan sumber.'}
 
 
 @contextmanager
@@ -211,9 +234,10 @@ def testing_status(project_id: int, request: Request, job_id: str | None = None)
     try:
         bridge = open_bridge(project_id)
         present = inspect_model(bridge, project_id, job)
+        index = source_index_state(bridge, project_id, job) if present else {}
         return {
-            **state, "status": "available" if present else "missing",
-            "message": "Berkas model dan indeks sumber ditemukan. Model dimuat ketika pertanyaan dikirim."
+            **state, **index, "status": "available" if present else "missing",
+            "message": (index.get('source_warning') or "Model tersedia dan kutipan sumber ditemukan. Relevansi jawaban tetap perlu diuji.")
             if present else "Model atau indeks sumber aman belum tersedia di runtime ini. Gunakan Pulihkan & jalankan untuk membangun indeks dari TXT tersimpan; tidak perlu training ulang.",
         }
     except HTTPException:
@@ -273,8 +297,8 @@ def chat(body: ChatRequest, request: Request):
                         or item.get('offset_scope') != 'passage'):
                     raise HTTPException(502, 'Asal kutipan sumber tidak valid.')
             if reply["mode"] == "extractive":
-                basis = "project"
-                notice = "Kutipan pencarian kata; bukan jawaban generatif model."
+                basis = "project" if sources else "none"
+                notice = "Kutipan pencarian kata; bukan jawaban generatif model." if sources else "Tidak ada kutipan terverifikasi untuk pertanyaan ini; periksa peringatan indeks sumber."
             elif sources:
                 basis = "mixed"
                 notice = "Sumber proyek tersedia; jawaban generatif juga dapat mencakup pengetahuan umum."
@@ -297,6 +321,8 @@ def chat(body: ChatRequest, request: Request):
 
 
 class RestoreRequest(BaseModel):
+    refresh_sources: bool = False
+    source_dataset_ids: list[str] = Field(default_factory=list, max_length=500)
     project_id: int = Field(gt=0)
     job_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
@@ -326,11 +352,24 @@ def restore_model(body: RestoreRequest, request: Request):
     project_row(body.project_id)
 
     job = selected_job(body.project_id, body.job_id)
+    if body.refresh_sources:
+        if not body.source_dataset_ids:
+            raise HTTPException(400, 'Pilih berkas fakta proyek untuk memperbarui sumber.')
+        from app.dataset_manifest import verify_selection
+        sources = verify_selection(body.project_id, body.source_dataset_ids)['datasets']
+        if any(item.get('source_mode') != 'facts_only' for item in sources):
+            raise HTTPException(409, 'Pembaruan sumber eksplisit hanya menerima berkas berperan fakta proyek, bukan percakapan latihan.')
+        job = {**job, 'inference_sources': sources}
+        return begin_restore(job, open_bridge)
+    if body.source_dataset_ids:
+        raise HTTPException(400, 'Konfirmasi refresh_sources diperlukan untuk mengganti sumber inferensi.')
     bridge = None
     try:
         bridge = open_bridge(body.project_id)
         if inspect_model(bridge, body.project_id, job):
-            return {"project_id": body.project_id, "job_id": body.job_id, "status": "completed", "message": "Artefak model yang dipilih sudah tersedia di runtime; tidak memulihkan atau melatih ulang."}
+            index = source_index_state(bridge, body.project_id, job)
+            return {"project_id": body.project_id, "job_id": body.job_id, "status": "completed", **index,
+                    "message": "Artefak model tersedia; tidak melatih ulang. " + (index.get('source_warning') or "Kutipan sumber ditemukan.")}
     except HTTPException:
         raise
     except Exception:

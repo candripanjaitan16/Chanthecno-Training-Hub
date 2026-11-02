@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
+import SourceAnalysis from "../components/SourceAnalysis";
+import { analyzeDatasets } from "../services/datasets";
 import NeuralCanvas from "../components/NeuralCanvas";
 import { Badge, Notice, PageTitle } from "../components/UI";
 
@@ -123,6 +125,8 @@ export default function TrainingWorkspace({ onNavigate }) {
   const [message, setMessage] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [selectedDatasetIds, setSelectedDatasetIds] = useState([]);
+  const [analysisResult, setAnalysisResult] = useState({ key: "", report: null, error: "" });
+  const [emptyAcceptedFor, setEmptyAcceptedFor] = useState("");
   const [lastChecked, setLastChecked] = useState(null);
   const [runtimeChecked, setRuntimeChecked] = useState(0);
   const [preflight, setPreflight] = useState(false);
@@ -143,6 +147,20 @@ export default function TrainingWorkspace({ onNavigate }) {
   const selectedBytes = selectedSources.reduce((total, source) => total + source.size, 0);
   const allSourcesReady = selectedSources.length > 0 && selectedSources.length <= 500 &&
     selectedSources.every(source => source.local_saved && source.drive_status === "saved" && source.receipt_id);
+
+  const analysisKey = selectedSources.map(source => `${source.id}:${source.sha256}:${source.source_mode || "filtered"}`).join("|");
+  const sourceAnalysis = analysisResult.key === analysisKey ? analysisResult.report : null;
+  const analysisError = analysisResult.key === analysisKey ? analysisResult.error : "";
+  const emptyAccepted = Boolean(analysisKey && emptyAcceptedFor === analysisKey);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!projectId || !analysisKey) return () => controller.abort();
+    const ids = analysisKey.split("|").map(value => value.split(":")[0]);
+    const timer = setTimeout(() => analyzeDatasets(projectId, ids, controller.signal).then(report => {
+      if (!controller.signal.aborted) setAnalysisResult({ key: analysisKey, report, error: "" });
+    }).catch(error => { if (!controller.signal.aborted) setAnalysisResult({ key: analysisKey, report: null, error: error.message }); }), 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [projectId, analysisKey]);
 
   const activeJob = !TERMINAL.has(job.status);
 
@@ -175,6 +193,8 @@ export default function TrainingWorkspace({ onNavigate }) {
     canCheck &&
     preflight &&
     allSourcesReady &&
+    sourceAnalysis?.training_samples > 0 &&
+    (sourceAnalysis.sources_ready || emptyAccepted) &&
     !datasetsLoading &&
     !datasetsError &&
     validModel &&
@@ -374,6 +394,7 @@ export default function TrainingWorkspace({ onNavigate }) {
           model_name: selectedName,
           epochs: selectedEpochs,
           dataset_ids: datasetIds,
+          acknowledge_empty_sources: emptyAccepted,
         }),
       );
 
@@ -455,6 +476,10 @@ export default function TrainingWorkspace({ onNavigate }) {
         {selectedSources.length > 0 && <details><summary>Ringkasan versi yang dipilih</summary>
           {selectedSources.map(source => <p key={source.id} style={{ overflowWrap: "anywhere" }}><strong>{source.name}</strong> · Drive ID: {source.drive_file_id || "belum ada"}<br /><small>SHA-256: {source.sha256}</small></p>)}
         </details>}
+        <SourceAnalysis report={sourceAnalysis} />
+        {analysisError && <Notice tone="error">Analisis sumber gagal: {analysisError}</Notice>}
+        {sourceAnalysis && !sourceAnalysis.sources_ready && <label><input type="checkbox" aria-label="Lanjutkan tanpa indeks sumber" checked={emptyAccepted} onChange={event => setEmptyAcceptedFor(event.target.checked ? analysisKey : "")} /> Saya memahami indeks kosong dan memilih latihan tanpa kutipan sumber. Ini tidak membuat jawaban ASSISTANT menjadi fakta.</label>}
+        {job.dataset_stats?.counts && <p>Sampel aktual setelah tokenizer: train {job.dataset_stats.counts.train || 0} · evaluasi {job.dataset_stats.counts.eval || 0}</p>}
         <p className="cth-muted">Training baru membuat run dan manifest baru. Resume checkpoint adalah tindakan CLI terpisah yang mensyaratkan dataset, konfigurasi dan state cocok. Menambah dataset tidak melanjutkan run lama.</p>
       </section>
 

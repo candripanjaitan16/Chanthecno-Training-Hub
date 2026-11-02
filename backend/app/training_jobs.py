@@ -59,6 +59,7 @@ class StartTraining(BaseModel):
     model_name: str = Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$')
     epochs: float = Field(default=1, gt=0, le=5, allow_inf_nan=False)
     dataset_ids: list[str] = Field(default_factory=list, max_length=500)
+    acknowledge_empty_sources: bool = False
     source_receipts: list[str] = Field(default_factory=list, max_length=500)
 
 
@@ -288,7 +289,7 @@ def monitor_once(job):
             if phase in {'training', 'preparing'} and not data.get('worker_running'):
                 uncertain_job(job, 'Heartbeat worker belum terverifikasi. Progres lama adalah riwayat; periksa koneksi tanpa mengulang training.', BackupError('Heartbeat worker tidak tersedia atau kedaluwarsa.'))
                 return
-            allowed = {'updated_at', 'run_id', 'step', 'max_steps', 'epoch', 'metrics', 'gpu_verified', 'error_type', 'worker_running'}
+            allowed = {'updated_at', 'run_id', 'step', 'max_steps', 'epoch', 'metrics', 'gpu_verified', 'error_type', 'worker_running', 'dataset_stats'}
             fields = {key: value for key, value in data.items() if key in allowed}
             fields.update(
                 training_status=phase,
@@ -677,6 +678,13 @@ def start_training(body: StartTraining, request: Request):
                'status': 'queued', 'message': 'Permintaan diterima; training belum mulai.',
                'autosave_enabled': True, 'backup_status': 'waiting'}
         manifest = dataset_manifest.verify_selection(body.project_id, body.dataset_ids, body.source_receipts)
+        from app.source_analysis import analyze_selection
+        report = analyze_selection(body.project_id, [item['dataset_id'] for item in manifest['datasets']], force=True)
+        if report['training_samples'] == 0:
+            raise HTTPException(409, 'Pilihan hanya berisi fakta sumber. Pilih berkas latihan untuk training baru.')
+        if not report['sources_ready'] and not body.acknowledge_empty_sources:
+            raise HTTPException(409, report['warning'] + ' Konfirmasi acknowledge_empty_sources hanya bila memang ingin latihan tanpa sumber.')
+        job['source_analysis'] = report
         job['dataset_manifest_sha256'] = dataset_manifest.freeze(job['job_id'], manifest)
         job['dataset_count'] = len(manifest['datasets'])
         save_job(job, _replace=True)

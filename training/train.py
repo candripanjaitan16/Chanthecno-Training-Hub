@@ -103,11 +103,13 @@ def run(args):
             if not args.resume_run:
                 selected = (settings['dataset_manifest'] or {}).get('datasets', [])
                 source_names = {f'{index:04d}.txt': f"{item['name']} (Drive: {item['file_id']})" for index, item in enumerate(selected)}
-                stats = prepare_data(data_dir, inputs, tokenizer, args.max_length, database, args.seed, source_names)
+                source_modes = {f'{index:04d}.txt': item.get('source_mode', 'filtered') for index, item in enumerate(selected)}
+                stats = prepare_data(data_dir, inputs, tokenizer, args.max_length, database, args.seed, source_names, source_modes)
                 if dataset_manifest(data_dir) != inputs:
                     raise ValueError("Dataset berubah selama persiapan. Buat run baru dari data yang tetap.")
                 write_json(directory / "dataset_stats.json", stats)
-                write_json(directory / "source-index-version.json", {"version": 2})
+                write_json(directory / "source-index-version.json", {"version": 2, "source_analysis": stats["source_analysis"]})
+                publish({"status": "preparing", "updated_at": now(), "run_id": directory.name, "dataset_stats": stats})
             model = AutoModelForCausalLM.from_pretrained(MODEL_ID, revision=MODEL_REVISION,
                 torch_dtype=torch.float16, device_map={"": 0}, trust_remote_code=False, use_safetensors=True, attn_implementation="eager")
             model.config.use_cache = False

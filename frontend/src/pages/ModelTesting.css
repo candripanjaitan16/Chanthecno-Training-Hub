@@ -924,3 +924,6 @@
   .mt-compose-wrap { padding: 9px 12px; }
   .mt-compose-note { margin-top: 5px; }
 }
+.mt-details > div { max-height: 55dvh; overflow: auto; }
+.mt-restore-state.sources-empty { background: #fff8ed; border-color: #f3e1bd; color: #856c42; }
+.mt-state-note[role="alert"] { color: #825f27; background: #fff8ed; border-radius: 7px; padding: 8px; }

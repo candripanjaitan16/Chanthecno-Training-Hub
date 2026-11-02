@@ -558,16 +558,21 @@ def rebuild_index(job, manifest, work, run, drive):
     spec.loader.exec_module(retrieval)
     with closing(sqlite3.connect(run / 'dataset.sqlite')) as connection:
         retrieval.create_index(connection)
+        reports = []
         for index, meta in enumerate(sources):
             text_file = work / f'source-{index}.txt'
             download_drive(drive, job['project_id'], meta.get('file_id'), 'datasets',
                            text_file, meta.get('size'), meta.get('sha256'))
             label = f"{meta.get('name', 'TXT tersimpan')} (Drive: {meta['file_id']})"
             with text_file.open(encoding='utf-8', errors='strict') as handle:
-                retrieval.index_source(connection, label, handle)
+                report = retrieval.index_source(connection, label, handle, meta.get('source_mode', 'filtered'))
+                report.update(name=meta.get('name'), file_id=meta['file_id'], sha256=meta.get('sha256'), size=meta.get('size'), dataset_id=meta.get('dataset_id'))
+                reports.append(report)
             text_file.unlink()
         connection.commit()
-    atomic_json(run / 'source-index-version.json', {'version': 2})
+    report = retrieval.source_summary(reports)
+    atomic_json(run / 'source-index-version.json', {'version': 2, 'source_analysis': report})
+    return report
 
 
 RESTORE = r'''
@@ -830,7 +835,9 @@ def restore_worker(job, restore_id, handle, open_bridge):
             ),
         )
 
-        rebuild_index(
+        if job.get('inference_sources') is not None:
+            manifest = {**manifest, 'source_backups': job['inference_sources']}
+        index_report = rebuild_index(
             job,
             manifest,
             work,
@@ -960,10 +967,8 @@ def restore_worker(job, restore_id, handle, open_bridge):
             project_id,
             restore_id,
             status="completed",
-            message=(
-                "Model dan indeks dipulihkan. "
-                "Lingkungan inferensi T4 siap."
-            ),
+            message="Model dipulihkan. " + ("Indeks sumber tersedia; kecocokan jawaban tetap perlu diuji." if index_report['sources_ready'] else index_report['warning']),
+            source_analysis=index_report,
             percent=100,
             run_id=job["run_id"],
         )

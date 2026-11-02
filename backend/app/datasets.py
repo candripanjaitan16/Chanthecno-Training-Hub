@@ -17,6 +17,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from googleapiclient.http import MediaIoBaseDownload
 from pydantic import BaseModel, Field
+from typing import Literal
 
 from app.database import get_db
 from app.storage import MAX_UPLOAD_BYTES
@@ -51,6 +52,8 @@ def db():
     conn = get_db()
     conn.execute('PRAGMA busy_timeout=10000')
     conn.execute(SCHEMA)
+    if 'source_mode' not in {row[1] for row in conn.execute('PRAGMA table_info(cth_datasets)')}:
+        conn.execute("ALTER TABLE cth_datasets ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'filtered'")
     conn.commit()
     return conn
 
@@ -91,18 +94,27 @@ def local_path(row):
 
 
 def public(row):
+    analysis = None
+    cached = local_path(row).parent/'analysis.json'
+    if cached.is_file() and not cached.is_symlink() and cached.stat().st_size <= 65536:
+        try:
+            value = json.loads(cached.read_text())
+            if isinstance(value, dict) and value.get('sha256') == row['sha256'] and value.get('source_mode') == row.get('source_mode', 'filtered'):
+                analysis = value
+        except (ValueError, OSError):
+            pass
     return {
         'id': row['id'], 'project_id': row['project_id'], 'type': row['kind'],
         'name': row['name'], 'size': row['size'], 'sha256': row['sha256'],
         'persisted': True, 'local_saved': local_path(row).is_file(),
         'drive_status': row['drive_status'], 'receipt_id': row['receipt_id'],
         'drive_file_id': row['drive_file_id'], 'error': row['error'],
-        'created_at': row['created_at'],
+        'created_at': row['created_at'], 'source_mode': row.get('source_mode', 'filtered'), 'analysis': analysis,
     }
 
 
 def update(row, **values):
-    allowed = {'drive_status', 'receipt_id', 'drive_file_id', 'error', 'next_retry', 'deleted_at'}
+    allowed = {'drive_status', 'receipt_id', 'drive_file_id', 'error', 'next_retry', 'deleted_at', 'source_mode'}
     if not values.keys() <= allowed:
         raise ValueError('Kolom update tidak diizinkan.')
     conn = db()
@@ -262,6 +274,35 @@ def resume_syncs():
 router.add_event_handler('startup', resume_syncs)
 
 
+class AnalysisSelection(BaseModel):
+    dataset_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+@router.post('/projects/{project_id}/analysis')
+def analyze_sources(project_id: int, body: AnalysisSelection, request: Request):
+    local_only(request)
+    project_row(project_id)
+    from app.source_analysis import analyze_selection
+    return analyze_selection(project_id, body.dataset_ids)
+
+
+class SourceMode(BaseModel):
+    source_mode: Literal['filtered', 'training_only', 'facts_only']
+
+
+@router.patch('/projects/{project_id}/{source_id}/source-mode')
+def source_mode(project_id: int, source_id: str, body: SourceMode, request: Request):
+    local_only(request)
+    project_row(project_id)
+    row = get_row(project_id, source_id)
+    if row['kind'] != 'txt':
+        raise HTTPException(400, 'Peran sumber hanya tersedia untuk TXT.')
+    update(row, source_mode=body.source_mode)
+    from app.source_analysis import analyze_row
+    analyze_row(get_row(project_id, source_id))
+    return public(get_row(project_id, source_id))
+
+
 @router.get('/projects/{project_id}')
 def list_sources(project_id: int, request: Request):
     local_only(request)
@@ -313,6 +354,8 @@ async def upload_txt(project_id: int, request: Request):
         if not size or not has_text:
             raise HTTPException(400,'TXT kosong atau hanya berisi spasi.')
         row, duplicate = store_file(project_id,name,'txt',size,digest.hexdigest(),staged)
+        from app.source_analysis import analyze_row
+        analyze_row(row)
         ensure_sync(row)
         return {'dataset':public(get_row(project_id, row['id'])),'duplicate':duplicate,'message':'TXT sudah tersimpan di disk backend. Status Drive diperiksa terpisah.'}
     except UnicodeError:

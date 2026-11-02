@@ -1,7 +1,7 @@
 """Single source of the CTH application/installer version."""
 import re
 
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 REPOSITORY = 'candripanjaitan16/Chanthecno-Training-Hub'
 
 

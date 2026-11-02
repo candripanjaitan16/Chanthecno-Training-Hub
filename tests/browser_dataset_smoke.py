@@ -36,13 +36,16 @@ async def main():
                     return
                 requests.append((request.method, path, request.post_data))
                 if path == '/api/app/status':
-                    data = {'version': '1.1.0', 'installation': 'installed', 'notice': None, 'changes': [], 'update': {'status': 'not_checked', 'message': 'Belum diperiksa'}}
+                    data = {'version': '1.1.1', 'installation': 'installed', 'notice': None, 'changes': [], 'update': {'status': 'not_checked', 'message': 'Belum diperiksa'}}
                 elif path == '/api/local-state':
                     data = {'generation': 'initial'}
                 elif path == '/api/projects/':
                     data = [{'id': 1, 'name': 'Alpha', 'model_name': 'chanthecno-alpha'}]
                 elif path == '/api/connections/google-drive':
                     data = {'status': 'connected', 'message': 'Fixture offline'}
+                elif path == '/api/datasets/projects/1/analysis':
+                    picked = [item for item in sources if item['id'] in request.post_data_json['dataset_ids']]
+                    data = {'files': [], 'training_samples': len(picked), 'qa_pairs': 0, 'searchable_quotes': len(picked), 'sources_ready': True, 'skipped_lines': 0}
                 elif path == '/api/datasets/projects/1':
                     data = sources
                 elif path.endswith('/sync'):

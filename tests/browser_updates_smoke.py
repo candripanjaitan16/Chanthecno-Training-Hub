@@ -31,14 +31,14 @@ async def main():
                     await route.continue_()
                     return
                 if path == '/api/app/status':
-                    notice = {'version': '1.1.0', 'previous_version': '1.0.0', 'message': 'Berhasil diperbarui ke versi 1.1.0', 'changes': changes} if state['upgrade'] and not state['seen'] else None
-                    value = {'version': '1.1.0', 'installation': 'installed', 'notice': notice, 'changes': changes, 'update': {'status': 'not_checked', 'message': 'Pembaruan belum diperiksa.'}}
+                    notice = {'version': '1.1.1', 'previous_version': '1.0.0', 'message': 'Berhasil diperbarui ke versi 1.1.1', 'changes': changes} if state['upgrade'] and not state['seen'] else None
+                    value = {'version': '1.1.1', 'installation': 'installed', 'notice': notice, 'changes': changes, 'update': {'status': 'not_checked', 'message': 'Pembaruan belum diperiksa.'}}
                 elif path == '/api/app/seen':
-                    assert request.post_data_json == {'version': '1.1.0'}
+                    assert request.post_data_json == {'version': '1.1.1'}
                     state['seen'] = True
                     state['acks'] += 1
                     acknowledged.set()
-                    value = {'seen': True, 'version': '1.1.0'}
+                    value = {'seen': True, 'version': '1.1.1'}
                 elif path == '/api/app/check-updates':
                     state['checks'] += 1
                     if state['status'] == 'available':
@@ -57,7 +57,7 @@ async def main():
                 await route.fulfill(status=200, content_type='application/json', body=json.dumps(value))
             await page.route('**/*', route_handler)
             await page.goto('http://127.0.0.1:8765/#deployments')
-            await expect(page.locator('.cth-update-footer')).to_contain_text('CTH 1.1.0')
+            await expect(page.locator('.cth-update-footer')).to_contain_text('CTH 1.1.1')
             await expect(page.get_by_role('dialog')).not_to_be_visible()
             assert state['checks'] == 0 and state['acks'] == 0
             await page.get_by_role('button', name='Periksa pembaruan', exact=True).click()
@@ -78,14 +78,14 @@ async def main():
             await page.get_by_label('Tutup panel pembaruan').click()
             state['upgrade'] = True
             await page.reload()
-            await expect(dialog).to_contain_text('Berhasil diperbarui ke versi 1.1.0')
+            await expect(dialog).to_contain_text('Berhasil diperbarui ke versi 1.1.1')
             await expect(dialog.get_by_role('heading', name='Yang baru', exact=True)).to_be_visible()
             await expect(dialog).to_contain_text(changes[0])
             await asyncio.wait_for(acknowledged.wait(), timeout=5)
             await page.screenshot(path=str(ROOT/'docs/screenshots/updates-desktop.png'))
             assert state['acks'] == 1
             await page.reload()
-            await expect(page.locator('.cth-update-footer')).to_contain_text('CTH 1.1.0')
+            await expect(page.locator('.cth-update-footer')).to_contain_text('CTH 1.1.1')
             await expect(dialog).not_to_be_visible()
             assert state['acks'] == 1
             await page.set_viewport_size({'width': 390, 'height': 844})

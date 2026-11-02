@@ -1,6 +1,6 @@
 # Chanthecno Training Hub
 
-Versi aplikasi: **1.1.0**. Ini versi kode/build; bukan pernyataan bahwa GitHub Release 1.1.0 sudah diterbitkan.
+Versi aplikasi: **1.1.1**. Ini versi kode/build; bukan pernyataan bahwa GitHub Release 1.1.1 sudah diterbitkan.
 
 Dashboard lokal untuk dataset proyek, fine-tuning LoRA di Google Colab T4, cadangan Google Drive, pemulihan model, dan pengujian chat. Aplikasi memakai React/Vite, FastAPI, dan SQLite. Model dasar tetap `Qwen/Qwen2.5-0.5B-Instruct`; nama model proyek adalah nama adapter hasil fine-tuning, bukan model yang dilatih dari nol.
 
@@ -124,6 +124,49 @@ Uninstall menghapus rilis program dan tautan perintah milik installer, **mempert
 - Checkpoint ditulis berkala. Penanda lengkap ditulis setelah penyimpanan dan pemeriksaan state optimizer/scheduler/RNG serta adapter. Resume CLI memerlukan kecocokan konfigurasi/data/kode dan checksum; checkpoint lama tanpa checksum state tidak diklaim sebagai kelanjutan persis.
 - Hentikan training meminta stop kooperatif setelah langkah optimizer dan penyimpanan checkpoint. **Stop & Simpan** berbeda: runtime hanya boleh dihentikan setelah cadangan dalam cakupan yang disetujui terverifikasi. Arsip workspace bukan otomatis model selesai atau GGUF.
 - Cadangan adapter mencakup tokenizer dan metadata; hasil diperiksa dengan ukuran/checksum. Arsip lokal dipertahankan saat upload gagal. Retry cadangan tidak menjalankan training ulang. Ekstraksi membatasi entri, ukuran, path, symlink dan checksum.
+
+## Format dataset, sampel latihan, dan sumber pencarian (1.1.1)
+
+TXT berformat `USER:/ASSISTANT:` dideteksi sebagai percakapan QA, tetapi jawaban assistant **tidak otomatis dipercaya** sebagai fakta. Teks biasa, percakapan, dan campuran dilaporkan terpisah. Contoh berikut sengaja berbeda peran walaupun isi jawabannya sama:
+
+```text
+USER: Siapa pembuat Proyek Contoh?
+ASSISTANT: Proyek Contoh dikembangkan oleh Tim Contoh.
+```
+
+Pasangan itu dapat dipakai untuk latihan, tetapi menghasilkan **nol kutipan**. Untuk sumber, tulis fakta yang telah diperiksa pada berkas terpisah, misalnya `fakta-proyek.txt`:
+
+```text
+Proyek Contoh dikembangkan oleh Tim Contoh.
+```
+
+Pada **Datasets → Peran berkas**, pilih secara eksplisit:
+
+| Peran | Dipakai latihan | Dipakai indeks |
+| --- | --- | --- |
+| Latihan + sumber tersaring (`filtered`, default) | TXT asli | Hanya kalimat dokumenter yang lolos filter |
+| Khusus percakapan/latihan (`training_only`) | TXT asli | Tidak |
+| Fakta proyek saja (`facts_only`) | Tidak | Kalimat dokumenter yang lolos filter |
+
+Perbaikan ini memilih **pemisahan fakta proyek dan percakapan latihan**, bukan mengangkat seluruh jawaban ASSISTANT menjadi sumber terkurasi. Menandai file QA sebagai fakta proyek tetap tidak membuat giliran chat masuk indeks. Instruksi, soal, self-claim assistant, kelanjutan chat dan teks tidak memenuhi filter tetap dilewati. Filter bukan pemeriksa kebenaran semantik; fakta yang ditulis pengguna tetap perlu diverifikasi sendiri.
+
+**Analisis sumber** pada halaman Datasets dan pilihan Training Workspace memperlihatkan format, pasangan QA terdeteksi, unit latihan awal, jumlah kutipan unik yang dapat dicari, serta nomor baris/alasan bagian yang dilewati (rincian maksimal 25 per berkas). “Dilewati” berarti tidak masuk indeks, bukan dihapus dari berkas atau diam-diam dibuang dari latihan. Perubahan peran hanya menambah metadata aplikasi; byte TXT asli, ukuran, checksum dan salinan Drive tidak ditulis ulang. Pilihan peran ikut manifest run yang dibekukan.
+
+Jumlah sebelum tokenizer dilabeli **unit awal**, bukan jumlah sampel training final: TXT dibaca dalam blok 16.000 karakter, sedangkan pasangan QA terdeteksi dilaporkan sebagai hitungan lain. TXT QA tidak otomatis diubah menjadi format supervised QA JSONL. Jumlah sequence train/evaluasi aktual baru dihitung setelah persiapan tokenizer dan ditampilkan dari `dataset_stats.counts`; catatan run lama yang tidak memiliki angka itu ditampilkan sebagai belum tersedia, tidak ditebak dari step.
+
+Jika kutipan nol, UI menampilkan **Indeks sumber kosong** sebelum training. Backend juga menolak start sampai pengguna secara eksplisit mengakui `acknowledge_empty_sources` bila memang ingin latihan tanpa sumber. Pilihan hanya berkas fakta tanpa unit latihan ditolak untuk training baru. Alternatif yang dianjurkan: pilih file percakapan `training_only` dan file fakta `facts_only` bersama-sama. Pemeriksaan salinan Drive tetap wajib untuk semua pilihan.
+
+### Memperbarui sumber model lama tanpa training ulang
+
+1. Tambahkan berkas fakta terpisah di Datasets, pilih peran **Fakta proyek saja**, periksa analisisnya, dan tunggu Drive terverifikasi.
+2. Pilih model tersimpan di **Model Testing → Detail model**.
+3. Centang berkas fakta yang benar, lalu klik **Perbarui sumber tanpa training**.
+
+Tindakan itu eksplisit: backend memeriksa proyek, peran, ukuran/checksum lokal/Drive, lalu membangun indeks inferensi baru dari fakta terpilih. Ini tidak menjalankan optimizer, tidak mengubah bobot adapter, isi TXT, riwayat job training atau manifest dataset run lama. Metadata indeks menyimpan nama, ID Drive dan checksum sumber yang dipakai. Pemulihan tetap memakai runtime proyek yang sesuai dan menolak pekerjaan aktif/tidak pasti.
+
+Saat pemulihan, jumlah kutipan dihitung kembali. Model yang berhasil dipulihkan dengan nol kutipan diberi peringatan; keberhasilan memulihkan bobot bukan klaim sumber siap. Jika metadata hitungan belum tersedia, UI menyatakan belum dapat diverifikasi. Mode kutipan memberi penolakan tanpa bukti, sedangkan mode generatif tetap bisa memakai pengetahuan umum model yang sama dengan label yang sesuai. Tidak perlu training ulang hanya untuk memperbaiki indeks sumber.
+
+API lokal terkait: POST `/api/datasets/projects/{id}/analysis`, PATCH `/api/datasets/projects/{id}/{source_id}/source-mode`, dan POST `/api/model-testing/restore` dengan `refresh_sources: true` serta `source_dataset_ids`. Mengirim pilihan berkas fakta tanpa konfirmasi refresh, berkas latihan sebagai overlay, atau sumber proyek lain ditolak. Data asli tidak dikonversi otomatis.
 
 ## Memakai model tersimpan tanpa training ulang
 

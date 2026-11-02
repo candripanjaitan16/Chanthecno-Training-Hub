@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { Badge, Empty, Notice, PageTitle } from "../components/UI";
-import { previewDataset, restoreDataset } from "../services/datasets";
+import SourceAnalysis from "../components/SourceAnalysis";
+import { analyzeDatasets, setSourceMode, previewDataset, restoreDataset } from "../services/datasets";
 
 const DRIVE_LABELS = {
   pending: "Drive: menunggu sinkronisasi",
@@ -192,9 +193,23 @@ export default function Datasets({ onNavigate }) {
                           {DRIVE_LABELS[source.drive_status] || "Drive belum terverifikasi"}
                         </Badge>
                         {source.error && <small>{source.error}</small>}
+                        {source.type === "txt" && <>
+                          <label>Peran berkas<select aria-label={`Peran ${source.name}`} value={source.source_mode || "filtered"} disabled={Boolean(busy)} onChange={event => {
+                            const mode = event.target.value;
+                            perform("Mengubah peran sumber…", async id => { await setSourceMode(id, source.id, mode); await refreshDatasets(id); });
+                          }}>
+                            <option value="filtered">Latihan + sumber tersaring</option><option value="training_only">Khusus percakapan/latihan</option><option value="facts_only">Fakta proyek saja (tanpa training)</option>
+                          </select></label>
+                          {source.analysis && <SourceAnalysis report={{ ...source.analysis, files: [source.analysis] }} />}
+                          <small>Peran tidak mengubah isi TXT. Fakta proyek tetap melewati filter; jawaban ASSISTANT tidak otomatis dimasukkan. Sumber model lama diperbarui secara eksplisit di Model Testing.</small>
+                        </>}
+
                       </div>
                       <div className="cth-actions" style={{ flexWrap: "wrap" }}>
-                        {source.type === "txt" && <button className="cth-text-button" disabled={Boolean(busy)} onClick={() => view(source)}>Lihat</button>}
+                        {source.type === "txt" && <>
+                          <button className="cth-text-button" disabled={Boolean(busy)} onClick={() => view(source)}>Lihat</button>
+                          <button className="cth-text-button" disabled={Boolean(busy) || !source.local_saved} onClick={() => perform("Menganalisis sumber…", async id => { await analyzeDatasets(id, [source.id]); await refreshDatasets(id); })}>Analisis sumber</button>
+                        </>}
                         {source.drive_status === "failed" && <button className="cth-text-button" disabled={Boolean(busy)} onClick={() => retry(source)}>Coba sinkronkan</button>}
                         <button className="cth-text-button danger" disabled={Boolean(busy)} onClick={() => remove(source)}>Hapus dari daftar</button>
                       </div>

@@ -25,7 +25,7 @@ class RestoreIndexTests(unittest.TestCase):
                 target.write_text('USER: Siapa pembuat ChanThecno?\nASSISTANT: Tokoh Palsu.\nFakta: ChanThecno dikembangkan oleh Candri Panjaitan.\n')
             with patch.object(model_restore, 'download_drive', side_effect=download):
                 model_restore.rebuild_index({'project_id': 1}, {'source_backups': [meta]}, root, run, object())
-            self.assertEqual(json.loads((run/'source-index-version.json').read_text()), {'version': 2})
+            self.assertEqual(json.loads((run/'source-index-version.json').read_text())['version'], 2)
             result = answer_from_sources(run/'dataset.sqlite', 'Siapa pencipta ChanThecno?')
             self.assertEqual(result['answer'], 'ChanThecno dikembangkan oleh Candri Panjaitan.')
             self.assertEqual(result['sources'], ['fakta.txt (Drive: fixture-file)'])

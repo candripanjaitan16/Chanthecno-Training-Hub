@@ -51,25 +51,98 @@ def create_index(conn):
 
 def store_quote(conn, source, quote):
     digest = hashlib.sha256((source + '\0' + quote).encode()).hexdigest()
-    conn.execute('INSERT OR IGNORE INTO passages(source,content,digest) VALUES(?,?,?)', (source, quote, digest))
+    return conn.execute('INSERT OR IGNORE INTO passages(source,content,digest) VALUES(?,?,?)', (source, quote, digest)).rowcount
 
 
-def index_source(conn, source, handle):
+SOURCE_MODES = {'filtered', 'training_only', 'facts_only'}
+ANALYSIS_VERSION = 1
+TURN = re.compile(r'^\s*(USER|ASSISTANT|SYSTEM|HUMAN|PENGGUNA|ASISTEN)\s*:\s*(.*)', re.I)
+
+
+def index_source(conn, source, handle, source_mode='filtered'):
+    if source_mode not in SOURCE_MODES:
+        raise ValueError('Peran sumber tidak didukung.')
+    report = {'analysis_version': ANALYSIS_VERSION, 'source_mode': source_mode, 'format': 'plain_text',
+              'qa_pairs': 0, 'training_samples': 0, 'sample_count_kind': 'text_blocks_before_tokenizer',
+              'searchable_quotes': 0, 'skipped_lines': 0, 'skipped': [], 'lines': 0}
     state = {'blocked': False}
+    role_lines = plain_lines = characters = 0
+    question = False
+    reading_question = False
+    waiting_answer = False
     while True:
         line = handle.readline(8193)
         if not line:
-            return
+            break
+        report['lines'] += 1
+        characters += len(line)
+        if report['lines'] == 1:
+            line = line.lstrip('\ufeff')
         if '\x00' in line:
             raise ValueError('Sumber teks mengandung NUL biner.')
+        reason = None
         if len(line) > 8192:
-            # Discard the whole oversized line and keep its unknown continuation out of evidence.
+            if TURN.match(line):
+                role_lines += 1
+            reason = 'baris terlalu panjang untuk kutipan'
             state['blocked'] = True
             while line and not line.endswith('\n'):
                 line = handle.readline(8193)
-            continue
-        for quote, _, _ in documentary_spans(line, state):
-            store_quote(conn, source, quote)
+                characters += len(line)
+        else:
+            turn = TURN.match(line)
+            if turn:
+                role_lines += 1
+                role, text = turn.groups()
+                if role.upper() in {'USER', 'HUMAN', 'PENGGUNA'}:
+                    question = bool(text.strip())
+                    reading_question = True
+                    waiting_answer = False
+                elif role.upper() in {'ASSISTANT', 'ASISTEN'}:
+                    reading_question = False
+                    waiting_answer = question
+                    if waiting_answer and text.strip():
+                        report['qa_pairs'] += 1
+                        waiting_answer = question = False
+                else:
+                    question = reading_question = waiting_answer = False
+            elif reading_question and line.strip():
+                question = True
+            elif waiting_answer and line.strip():
+                report['qa_pairs'] += 1
+                question = waiting_answer = False
+            quotes = list(documentary_spans(line, state))
+            if not state['blocked'] and line.strip() and not ROLE.search(line):
+                plain_lines += 1
+            if source_mode == 'training_only':
+                reason = 'berkas khusus latihan; tidak menjadi sumber'
+            elif quotes:
+                added = sum(store_quote(conn, source, quote) for quote, _, _ in quotes)
+                report['searchable_quotes'] += added
+                if added < len(quotes):
+                    reason = 'kutipan duplikat; teks asli tetap disimpan'
+            elif line.strip():
+                reason = 'percakapan/soal/instruksi atau teks tidak memenuhi filter kutipan'
+        if reason:
+            report['skipped_lines'] += 1
+            if len(report['skipped']) < 25:
+                report['skipped'].append({'line': report['lines'], 'reason': reason})
+    report['sources_ready'] = report['searchable_quotes'] > 0
+    report['format'] = ('mixed' if plain_lines else 'conversation_qa') if role_lines else 'plain_text'
+    report['training_samples'] = 0 if source_mode == 'facts_only' else (characters + 15999) // 16000
+    return report
+
+
+def source_summary(reports, details=False):
+    quotes = sum(item['searchable_quotes'] for item in reports)
+    files = reports if details else [{key: value for key, value in item.items() if key != 'skipped'} for item in reports]
+    return {'files': files, 'searchable_quotes': quotes,
+            'training_samples': sum(item['training_samples'] for item in reports),
+            'sample_count_kind': 'text_blocks_before_tokenizer',
+            'qa_pairs': sum(item['qa_pairs'] for item in reports),
+            'skipped_lines': sum(item['skipped_lines'] for item in reports),
+            'sources_ready': quotes > 0,
+            'warning': None if quotes else 'Indeks sumber kosong. Tidak ada kutipan yang dapat dicari; percakapan latihan tidak otomatis menjadi fakta. Pisahkan berkas fakta proyek.'}
 
 
 def retrieve(database, question, limit=3):

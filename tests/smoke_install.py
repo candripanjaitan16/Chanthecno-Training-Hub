@@ -40,6 +40,7 @@ def main():
         assert not (first/'frontend/node_modules').exists()
         assert (first/'requirements-training.txt').is_file()
         assert (first/'training/retrieval.py').is_file()
+        assert (first/'backend/app/source_analysis.py').is_file()
         assert (first/'backend/app/dataset_manifest.py').is_file()
         installed_version=subprocess.check_output([str(first/'backend/.venv/bin/python'),'-c','import sys,json; print(json.dumps(list(sys.version_info[:3])))'],text=True)
         assert json.loads(installed_version)==list(sys.version_info[:3])

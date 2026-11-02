@@ -6,13 +6,14 @@ Dijalankan pada cloud Linux, Python **3.10.12 dan 3.12.14**, Node 24.19.0/npm 11
 
 | Pemeriksaan | Hasil |
 | --- | --- |
-| `python -m unittest discover -s tests -v` | **88 tes offline lulus pada masing-masing interpreter** |
+| `python -m unittest discover -s tests -v` | **104 tes offline lulus pada masing-masing interpreter** |
 | `npm --prefix frontend run build` | Lulus, frontend produksi dibangun |
 | `npm --prefix frontend run lint` | Exit 0; 18 warning kode React yang masih perlu perbaikan terpisah |
 | `python3 tests/smoke_install.py` | Instalasi nyata dua kali pada Python 3.10.12 dan 3.12.14, interpreter virtualenv cocok, production HTTP/asset, pengunci pembaruan, shutdown SIGTERM, proses lain dipertahankan, uninstall dengan data/konfigurasi tetap ada |
 | `python3 tests/browser_smoke.py` | Chromium desktop 1440×1000 dan mobile 390×844 lulus; API mock |
 | `python3 tests/browser_dataset_smoke.py` | Pilihan dataset, status upload/verifikasi/gagal, retry tanpa upload ulang dan payload dataset_ids lulus dengan API mock |
 | `python3 tests/browser_updates_smoke.py` | Sidebar versi, status no-release/jaringan/rate limit, target/catatan/instruksi, notifikasi setelah startup dan tidak berulang, desktop/mobile lulus dengan API mock |
+| `python3 tests/browser_source_analysis_smoke.py` | Hitungan QA/indeks kosong, konfirmasi sebelum training, peran fakta yang tidak mempromosikan chat, dan reindex model tanpa training lulus (API mock) |
 | `python -m compileall -q backend/app training tools tests chanthecno-hub` | Lulus |
 | Pemeriksaan whitespace Git | Lulus |
 
@@ -24,9 +25,10 @@ Uji browser memeriksa nama model dinamis, pengiriman chat, salin jawaban, percak
 - [Mobile](screenshots/model-testing-mobile.png)
 - [Pembaruan desktop (fixture)](screenshots/updates-desktop.png)
 - [Pembaruan mobile (fixture)](screenshots/updates-mobile.png)
+- [Peringatan analisis QA/indeks kosong (fixture)](screenshots/source-analysis-empty.png)
 - [Pilihan dan ringkasan dataset (fixture)](screenshots/dataset-training-selection.png)
 
-Untuk mengulang browser smoke, gunakan Python dengan Playwright (divalidasi 1.62.0) dan Chromium lokal di `/usr/bin/chromium`. Suite backend hanya membutuhkan `requirements-dev.txt`; smoke installer membutuhkan akses registry paket dan port lokal 8000 kosong. Ketiga browser smoke memakai port 8765 dan dijalankan bergantian. Tidak ada dependensi Playwright dalam runtime aplikasi.
+Untuk mengulang browser smoke, gunakan Python dengan Playwright (divalidasi 1.62.0) dan Chromium lokal di `/usr/bin/chromium`. Suite backend hanya membutuhkan `requirements-dev.txt`; smoke installer membutuhkan akses registry paket dan port lokal 8000 kosong. Keempat browser smoke memakai port 8765 dan dijalankan bergantian. Tidak ada dependensi Playwright dalam runtime aplikasi.
 
 Starlette saat ini menampilkan peringatan deprecation kompatibilitas TestClient/httpx; seluruh tes tetap berjalan dan lulus. CI memakai matriks Python 3.10.12/3.12 untuk suite offline, build dan lint; eksekusi CI pada GitHub belum diverifikasi di cloud ini.
 
@@ -46,6 +48,15 @@ Starlette saat ini menampilkan peringatan deprecation kompatibilitas TestClient/
 - Dependency/build/startup gagal diuji dengan mock build; rilis lama tetap dapat dijalankan. Kegagalan pemasangan perintah sesudah penggantian pointer mengembalikan pointer lama. Status pekerjaan/runtime/restore tidak pasti dan sinkronisasi aktif menolak instalasi/uninstall. Model/data sentinel tetap utuh. Tidak ada git pull/reset atau overwrite checkout.
 - Smoke installer nyata Python 3.10.12 melewati probe backend/metadata versi/frontend/aset memakai direktori data/config sementara sebelum aktivasi, kemudian startup/shutdown/reinstall/uninstall aktual. Suite mock/regresi dan build juga memverifikasi Python 3.12.14; smoke installer 3.12.14 untuk fitur versi dijalankan terpisah sebagaimana hasil tabel. Probe tidak membaca token/data pengguna atau menghubungi Google/GitHub Release.
 - Catatan release yang menyerupai HTML/script ditampilkan sebagai teks pada browser. Screenshot adalah fixture, bukan bukti bahwa release 1.2.0 tersedia di GitHub.
+
+## Analisis format dan pemisahan sumber CTH 1.1.1
+
+- Fixture identitas yang sama pada teks biasa dan pasangan USER/ASSISTANT menghasilkan hitungan yang jujur: fakta dokumenter dapat dikutip; pasangan QA terdeteksi sebagai latihan tetapi bukan sumber. Percakapan campuran, self-claim identitas palsu dan instruksi assistant tetap disaring, termasuk saat file diberi peran facts_only.
+- Analisis melaporkan pasangan QA, blok/unit latihan sebelum tokenizer, kutipan unik, baris/alasan yang dilewati dan peran berkas. Unit awal bukan klaim jumlah sequence training final. Uji persiapan memakai tokenizer palsu dan SQLite membuktikan counts train/eval sesuai sampel yang disimpan, serta facts_only tidak dikirim ke tokenizer latihan; tidak ada Trainer/optimizer/model/GPU yang dijalankan.
+- Backend mewajibkan pengakuan eksplisit untuk latihan dengan indeks kosong dan menolak pemilihan sumber-fakta saja sebagai training. Cache analisis yang dipalsukan atau rusak tidak menutupi pemeriksaan baru di endpoint start. Byte/checksum asli tetap sama setelah analisis dan perubahan peran; proyek tetap terisolasi.
+- Pemulihan QA-only membuat indeks valid tetapi kosong dan menyimpan laporan nol kutipan. Status/hasil pemulihan menampilkan peringatan, bukan klaim sumber siap. Model Testing membedakan hitungan sumber dari jumlah sampel aktual run yang tercatat atau belum tersedia.
+- Overlay fakta untuk model tersimpan diverifikasi melalui Drive mock dan memicu begin_restore, bukan prepare_job/training. Catatan current/history training tetap tidak berubah. Pemulihan hanya mengganti indeks dan penandanya setelah memeriksa checksum bobot lama; berkas asli/model/manifest training dipertahankan. Tindakan ini hanya terjadi sesudah pilihan fakta dan refresh_sources eksplisit.
+- Browser menguji peringatan dan tombol start yang tertahan untuk QA-only, hilangnya peringatan setelah fakta terpisah dipilih, QA yang tetap nol kutipan meskipun perannya diubah, serta tombol Perbarui sumber tanpa training. Seluruh API diintersep mock dan tidak ada POST training/start pada skenario tersebut. Screenshot merupakan fixture, bukan bukti inferensi model nyata.
 
 ## Batas bukti
 

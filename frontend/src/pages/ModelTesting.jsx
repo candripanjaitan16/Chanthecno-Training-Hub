@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
 import "./ModelTesting.css";
+import SourceAnalysis from "../components/SourceAnalysis";
 
 const API = (
   import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://127.0.0.1:8000" : "")
@@ -111,7 +112,7 @@ function dateLabel(run) {
 }
 
 export default function ModelTesting({ onNavigate }) {
-  const { selectedProject } = useWorkspace();
+  const { selectedProject, datasets = [] } = useWorkspace();
   const projectId = selectedProject?.id;
 
   const [models, setModels] = useState([]);
@@ -127,6 +128,7 @@ export default function ModelTesting({ onNavigate }) {
   const [mode, setMode] = useState("qwen");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
+  const [sourceDatasetIds, setSourceDatasetIds] = useState([]);
   const [libraryOpen, setLibraryOpen] = useState(() => window.matchMedia("(min-width: 701px)").matches);
 
   const scope = useRef("");
@@ -134,6 +136,10 @@ export default function ModelTesting({ onNavigate }) {
   const scroll = useRef(null);
 
   const selectedModel = models.find((item) => item.job_id === selected);
+
+  const factSources = datasets.filter(item => item.type === "txt" && item.source_mode === "facts_only");
+  const selectedFacts = factSources.filter(item => sourceDatasetIds.includes(item.id));
+  const factsReady = selectedFacts.length > 0 && selectedFacts.every(item => item.drive_status === "saved" && item.local_saved);
 
   const restoring = startingRestore || ACTIVE.includes(restore.status);
 
@@ -231,6 +237,7 @@ export default function ModelTesting({ onNavigate }) {
 
     setModel(null);
     setMessages([]);
+    setSourceDatasetIds([]);
     setQuestion("");
     setSending(false);
 
@@ -295,7 +302,8 @@ export default function ModelTesting({ onNavigate }) {
     }
   }, [messages, sending]);
 
-  async function restoreModel() {
+  async function restoreModel(refreshSources = false) {
+    const refreshSourcesExplicitly = refreshSources === true;
     if (busy || !selected || pending.current) {
       return;
     }
@@ -317,6 +325,8 @@ export default function ModelTesting({ onNavigate }) {
           body: JSON.stringify({
             project_id: projectId,
             job_id: selected,
+            refresh_sources: refreshSourcesExplicitly,
+            source_dataset_ids: refreshSourcesExplicitly ? selectedFacts.map(item => item.id) : [],
           }),
         },
         undefined,
@@ -325,6 +335,7 @@ export default function ModelTesting({ onNavigate }) {
 
       if (scope.current === key) {
         setRestore(value);
+        if (refreshSourcesExplicitly) { setMessages([]); setModel(null); }
       }
     } catch (err) {
       if (scope.current === key) {
@@ -589,6 +600,13 @@ export default function ModelTesting({ onNavigate }) {
                   Model dimuat di Colab ketika pertanyaan dikirim. Setiap
                   pertanyaan diproses mandiri.
                 </p>
+                <p>{model?.training_sample_counts ? `Sampel aktual run tercatat: train ${model.training_sample_counts.train || 0} · evaluasi ${model.training_sample_counts.eval || 0}` : "Jumlah sampel training aktual belum tersedia dari catatan run ini."}</p>
+                <SourceAnalysis report={model?.source_analysis || restore.source_analysis} />
+                <h3>Fakta proyek untuk model ini</h3>
+                <p>Pilih berkas fakta yang terpisah dari percakapan latihan. Ini memperbarui indeks inferensi, bukan melatih ulang atau mengubah manifest run lama.</p>
+                {!factSources.length && <p>Belum ada berkas fakta proyek. Atur perannya di halaman Datasets.</p>}
+                {factSources.map(item => <label key={item.id} style={{ display: "block", overflowWrap: "anywhere" }}><input type="checkbox" disabled={busy} checked={sourceDatasetIds.includes(item.id)} onChange={event => setSourceDatasetIds(previous => event.target.checked ? [...previous, item.id] : previous.filter(id => id !== item.id))} /> {item.name} · {item.drive_status === "saved" ? "Drive terverifikasi" : "belum terverifikasi"}</label>)}
+                <button type="button" disabled={busy || !selected || !factsReady} onClick={() => restoreModel(true)}>Perbarui sumber tanpa training</button>
                 <button
                   type="button"
                   disabled={busy || !messages.length}
@@ -725,7 +743,7 @@ export default function ModelTesting({ onNavigate }) {
             <div className={`mt-restore-state ${restore.status}`} role="status">
               <strong>
                 {restore.status === "completed"
-                  ? "Pemulihan selesai"
+                  ? restore.source_analysis?.sources_ready === false ? "Model dipulihkan · indeks sumber kosong" : "Pemulihan selesai; periksa status sumber"
                   : restoring
                     ? "Memulihkan model"
                     : "Pemulihan perlu diperiksa"}
@@ -744,6 +762,7 @@ export default function ModelTesting({ onNavigate }) {
             </div>
           )}
 
+          {model?.source_warning && !restoring && <p role="alert" className="mt-state-note">{model.source_warning}</p>}
           {!available && model?.message && !restoring && (
             <p className="mt-state-note">{model.message}</p>
           )}
@@ -754,7 +773,7 @@ export default function ModelTesting({ onNavigate }) {
                 aria-label="Pesan untuk model"
                 placeholder={
                   available
-                    ? "Tanyakan sesuatu tentang sumber proyekmu…"
+                    ? model?.sources_ready === false ? "Indeks kosong; jawaban generatif memakai pengetahuan umum." : "Tanyakan sesuatu tentang sumber proyekmu…"
                     : "Pertanyaan aktif setelah model dipulihkan."
                 }
                 value={question}
